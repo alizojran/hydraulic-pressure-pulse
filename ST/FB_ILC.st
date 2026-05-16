@@ -271,21 +271,21 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             IF nScaleCycleCount >= CYCLES_PER_UPDATE THEN
                 rAmpFbPos := rAmpFbPosSum / INT_TO_REAL(nScaleCycleCount);
                 rAmpFbNeg := rAmpFbNegSum / INT_TO_REAL(nScaleCycleCount);
-                // 上半：饱和门控仅在已过冲(rScale>1)时生效，避免欠幅时被假阳性饱和冻结
-                //   - rScalePos>1 且饱和：指令超过目标导致削顶 → 缩小
-                //   - 其余情况（含 rScale≤1 时的"饱和"假阳性）：按幅值比律正常学习
+                // 上半：饱和缩小仅在反馈已达目标深度且已过冲(rScale>1)时生效
+                //   - 反馈幅值 < 目标幅值：欠驱动，不论饱和判定如何都按幅值比律学习
+                //   - 反馈幅值 ≥ 目标幅值 且 rScalePos>1 且 近峰停留过长：真实过冲削顶 → 缩小
                 //   注：rAmpFbPos 作为反馈近峰基准本身是波形相关的，反馈圆顿时会假阳性，
-                //   故只信任过冲方向的饱和判定；欠幅方向以幅值比为准持续追平
+                //   故仅当反馈幅值确实达到目标幅值时才采信饱和判定
                 IF rAmpFbPos > 0.001 THEN
-                    IF rTopSatRatio > SAT_TOL AND rScalePos > 1.0 THEN
+                    IF rTopSatRatio > SAT_TOL AND rAmpFbPos >= rHalfRange AND rScalePos > 1.0 THEN
                         rScalePos := rScalePos * (1.0 - rLearningRate * rTopSatRatio);
                     ELSE
                         rScalePos := rScalePos * (1.0 + rLearningRate * (rHalfRange / rAmpFbPos - 1.0));
                     END_IF
                 END_IF
-                // 下半：同上策略（修复底部圆顿够不到最低点的问题）
+                // 下半：同上策略（修复底部够不到最低点）
                 IF rAmpFbNeg > 0.001 THEN
-                    IF rBotSatRatio > SAT_TOL AND rScaleNeg > 1.0 THEN
+                    IF rBotSatRatio > SAT_TOL AND rAmpFbNeg >= rHalfRange AND rScaleNeg > 1.0 THEN
                         rScaleNeg := rScaleNeg * (1.0 - rLearningRate * rBotSatRatio);
                     ELSE
                         rScaleNeg := rScaleNeg * (1.0 + rLearningRate * (rHalfRange / rAmpFbNeg - 1.0));
