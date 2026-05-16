@@ -11,6 +11,8 @@ VAR_INPUT
 	rLearningRate   : REAL := 0.3;   // 端点学习率 (rVMax/rVMin 的步长系数)
 	rAlphaLR        : REAL := 0.4;   // α 学习率（仅正弦/三角波有效）
 	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（FALSE = 4象限参数锁定不更新）
+	bHarmEnable     : BOOL := FALSE; // 谐波 ILC 第三层使能（2~5 阶傅里叶系数学习，修被控对象段内非单调响应）
+	rHarmLR         : REAL := 0.2;   // 谐波学习率
 	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正，同时完成波形类型检测
 END_VAR
 VAR_OUTPUT
@@ -77,6 +79,25 @@ VAR
 	iTargetAboveMidCount: INT;       // 暖机期：指令在均值以上的采样点数（对称性检测）
 	iTotalDetectCount   : INT;       // 暖机期：有效检测采样总数
 	bWaveDetected       : BOOL;      // 波形类型已检测完成
+	// ---- 谐波 ILC 第三层 ----
+	// 索引 2..5 对应 2~5 阶谐波；基波（1 阶）交给端点学习层，不在这里学
+	aTgtSum         : ARRAY [2..5] OF REAL;   // 当前周期：目标 k 阶余弦内积累加
+	bTgtSum         : ARRAY [2..5] OF REAL;   // 当前周期：目标 k 阶正弦内积累加
+	aActSum         : ARRAY [2..5] OF REAL;   // 当前周期：反馈 k 阶余弦内积累加
+	bActSum         : ARRAY [2..5] OF REAL;   // 当前周期：反馈 k 阶正弦内积累加
+	aHarmCorr       : ARRAY [2..5] OF REAL;   // 学到的 cmd k 阶余弦修正系数（持久）
+	bHarmCorr       : ARRAY [2..5] OF REAL;   // 学到的 cmd k 阶正弦修正系数（持久）
+	iHarmK          : INT;
+	rHarmAngle      : REAL;
+	rHarmCos        : REAL;
+	rHarmSin        : REAL;
+	rHarmCorrection : REAL;
+	rHarmNorm       : REAL;
+	rHarmLimit      : REAL;
+	rATgt           : REAL;
+	rBTgt           : REAL;
+	rAAct           : REAL;
+	rBAct           : REAL;
 END_VAR
 VAR CONSTANT
 	// α 边界：原来 0.05/0.70 会让重建波形出现"平台+尖刺"，被控对象跟不上反而塑形出反馈凸起
@@ -95,6 +116,9 @@ VAR CONSTANT
 	// 端点限幅：rVMax / rVMin 距各自目标端点不超过 K * rPrevTargetRange
 	// 等价于把幅值/偏置整体放大不超过 (1 + 2K) 倍，防积分饱和
 	V_RANGE_LIMIT_K   : REAL := 2.0;
+	// 谐波系数限幅：|aHarmCorr[k]|, |bHarmCorr[k]| ≤ HARM_CORR_LIMIT_K * rHalfRange
+	// 单阶谐波幅值不超过目标半幅的 30%，防个别频道发散
+	HARM_CORR_LIMIT_K : REAL := 0.3;
 END_VAR
 
 
@@ -136,6 +160,10 @@ IF bReset OR NOT bEnable THEN
         iTargetAboveMidCount   := 0;
         iTotalDetectCount      := 0;
         bWaveDetected          := FALSE;
+        FOR iHarmK := 2 TO 5 DO
+            aHarmCorr[iHarmK] := 0.0;
+            bHarmCorr[iHarmK] := 0.0;
+        END_FOR
     END_IF
     rOutput        := 0.0;
     rVirtualTarget := 0.0;
@@ -150,6 +178,12 @@ IF bReset OR NOT bEnable THEN
     iQ3Count       := 0;
     iQ4Count       := 0;
     bNewCyclePrev  := FALSE;
+    FOR iHarmK := 2 TO 5 DO
+        aTgtSum[iHarmK] := 0.0;
+        bTgtSum[iHarmK] := 0.0;
+        aActSum[iHarmK] := 0.0;
+        bActSum[iHarmK] := 0.0;
+    END_FOR
     IF NOT bEnable THEN
         RETURN;
     END_IF
@@ -288,8 +322,38 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 rValleyErrSum := 0.0;
                 nUpdateCount  := 0;
             END_IF
+
+            // ---- 谐波 ILC 第三层自学习（2~5 阶傅里叶系数）----
+            // 用累计的内积 (∫signal·cos/sin) 算出本周期目标/反馈各阶谐波系数（×2/N 归一）
+            // 更新法则：c_k_cos += LR · (a_k_tgt - a_k_act)，正弦同理
+            // 输出时 Σ c_k · 谐波_k(rPhi) 加到 rVirtualTarget
+            // 修被控对象段内非单调响应（凸起、台阶），是 4 段 α 无法表达的形状细节
+            IF bHarmEnable AND rPrevTargetRange > 0.001 AND iPointsPerCycle > 0 THEN
+                rHarmNorm  := 2.0 / INT_TO_REAL(iPointsPerCycle);
+                rHarmLimit := HARM_CORR_LIMIT_K * rHalfRange;
+                FOR iHarmK := 2 TO 5 DO
+                    rATgt := aTgtSum[iHarmK] * rHarmNorm;
+                    rBTgt := bTgtSum[iHarmK] * rHarmNorm;
+                    rAAct := aActSum[iHarmK] * rHarmNorm;
+                    rBAct := bActSum[iHarmK] * rHarmNorm;
+                    aHarmCorr[iHarmK] := aHarmCorr[iHarmK] + rHarmLR * (rATgt - rAAct);
+                    bHarmCorr[iHarmK] := bHarmCorr[iHarmK] + rHarmLR * (rBTgt - rBAct);
+                    IF aHarmCorr[iHarmK] >  rHarmLimit THEN aHarmCorr[iHarmK] :=  rHarmLimit; END_IF
+                    IF aHarmCorr[iHarmK] < -rHarmLimit THEN aHarmCorr[iHarmK] := -rHarmLimit; END_IF
+                    IF bHarmCorr[iHarmK] >  rHarmLimit THEN bHarmCorr[iHarmK] :=  rHarmLimit; END_IF
+                    IF bHarmCorr[iHarmK] < -rHarmLimit THEN bHarmCorr[iHarmK] := -rHarmLimit; END_IF
+                END_FOR
+            END_IF
         END_IF
     END_IF
+
+    // 重置谐波内积累加器（每周期开始重新积分）
+    FOR iHarmK := 2 TO 5 DO
+        aTgtSum[iHarmK] := 0.0;
+        bTgtSum[iHarmK] := 0.0;
+        aActSum[iHarmK] := 0.0;
+        bActSum[iHarmK] := 0.0;
+    END_FOR
 
     // 诊断派生量：保留 rScalePos / rScaleNeg 给上位机看
     IF rHalfRange > 0.001 AND bVInitialized THEN
@@ -303,10 +367,34 @@ END_IF
 // 每个采样点
 // ============================================================
 
+// 周期相位 rPhi（供谐波累加与正弦/三角重建共用）
+IF iPointsPerCycle > 0 THEN
+    rPhi := INT_TO_REAL(iPointIndex) / INT_TO_REAL(iPointsPerCycle);
+ELSE
+    rPhi := 0.0;
+END_IF
+IF rPhi < 0.0 THEN rPhi := 0.0; END_IF
+IF rPhi > 1.0 THEN rPhi := 1.0; END_IF
+
 IF rTargetRaw > rTargetMax THEN rTargetMax := rTargetRaw; END_IF
 IF rTargetRaw < rTargetMin THEN rTargetMin := rTargetRaw; END_IF
 IF rActual > rActualMax THEN rActualMax := rActual; END_IF
 IF rActual < rActualMin THEN rActualMin := rActual; END_IF
+
+// ---- 谐波内积累加（仅当 bHarmEnable 开启时执行，省 CPU）----
+// 每周期累加 ∫ signal · cos(2π·k·φ) dφ 与 ∫ signal · sin(2π·k·φ) dφ
+// 周期边界处归一为本周期的傅里叶系数 a_k, b_k
+IF bHarmEnable THEN
+    FOR iHarmK := 2 TO 5 DO
+        rHarmAngle := TWO_PI * INT_TO_REAL(iHarmK) * rPhi;
+        rHarmCos   := COS(rHarmAngle);
+        rHarmSin   := SIN(rHarmAngle);
+        aTgtSum[iHarmK] := aTgtSum[iHarmK] + rTargetRaw * rHarmCos;
+        bTgtSum[iHarmK] := bTgtSum[iHarmK] + rTargetRaw * rHarmSin;
+        aActSum[iHarmK] := aActSum[iHarmK] + rActual    * rHarmCos;
+        bActSum[iHarmK] := bActSum[iHarmK] + rActual    * rHarmSin;
+    END_FOR
+END_IF
 
 rErrorSum2  := rErrorSum2 + (rTargetRaw - rActual) * (rTargetRaw - rActual);
 iErrorCount := iErrorCount + 1;
@@ -361,14 +449,7 @@ END_IF
 //   正弦(1)/三角(2)：用 α 4 段重建标准基底，得到去噪后的 rSourceTarget
 //   梯形(3)/矩形(4)/任意波(5)：直接用 rTargetRaw 作源（不假设波形形状）
 IF nWaveType = 1 OR nWaveType = 2 THEN
-    IF iPointsPerCycle > 0 THEN
-        rPhi := INT_TO_REAL(iPointIndex) / INT_TO_REAL(iPointsPerCycle);
-    ELSE
-        rPhi := 0.0;
-    END_IF
-    IF rPhi < 0.0 THEN rPhi := 0.0; END_IF
-    IF rPhi > 1.0 THEN rPhi := 1.0; END_IF
-
+    // rPhi 已在每个采样点开始处算好
     rT1 := rAlpha1Cmd;
     rT2 := rT1 + rAlpha2Cmd;
     rT3 := rT2 + rAlpha3Cmd;
@@ -421,6 +502,20 @@ END_IF
 // 形状严格保留，端点替换为学到的虚拟峰/谷
 rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
+
+// ---- 谐波 ILC 第三层修正叠加（仅 bHarmEnable 开启时） ----
+// 形状细节通过 2~5 阶傅里叶系数补到 rVirtualTarget 上
+// 注意：基波（1 阶）由端点学习层负责，这里不补，避免与 rVMin/rVMax 冲突
+IF bHarmEnable THEN
+    rHarmCorrection := 0.0;
+    FOR iHarmK := 2 TO 5 DO
+        rHarmAngle      := TWO_PI * INT_TO_REAL(iHarmK) * rPhi;
+        rHarmCorrection := rHarmCorrection
+            + aHarmCorr[iHarmK] * COS(rHarmAngle)
+            + bHarmCorr[iHarmK] * SIN(rHarmAngle);
+    END_FOR
+    rVirtualTarget := rVirtualTarget + rHarmCorrection;
+END_IF
 
 rOutput := rVirtualTarget - rTargetRaw;
 
