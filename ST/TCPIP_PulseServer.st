@@ -1,7 +1,7 @@
 PROGRAM TCPIP_PulseServer
 VAR
 	ServerPORT : UINT := 502; // ---- 服务器参数 ----
-	IP_ADR_server : NBS.IP_ADDR; // 控制器 IP，按实际修改
+	IP_ADR_server : NBS.IP_ADDR := (sAddr := '10.222.103.80'); // 控制器 IP，按实际修改
 	TCP_Server_open : NBS.TCP_Server; // ---- NBS 功能块 ----
  功能块链路：TCP_Server_open → TCP_Connection → server_read / server_write
  TCP_Server_open: 打开服务端，绑定IP和端口，输出 hServer
@@ -26,7 +26,7 @@ VAR
 	write_busy_bool : ARRAY[0..1] OF BOOL;
 	write_error_bool : ARRAY[0..1] OF BOOL;
 	mark_for_mun : UINT := 1; // ==2026-05-10，mark_for_mun初始化值为1
-	blink_server : blink_num_hjj; // ---- 服务器异常重启 FT ----
+	blink_server : blink_num_hjj := (F_num := 5, T_num := 50); // ---- 服务器异常重启 FT ----
  blink_server 容错重启机制：
  当 TCP_Server_open 报错（xError=TRUE）或服务器句柄无效（hServer=0）时，
  说明服务器进入异常状态，无法正常工作。
