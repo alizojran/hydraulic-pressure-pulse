@@ -9,10 +9,8 @@ VAR_INPUT
 	bReset          : BOOL;
 	iMaxIterations  : INT;
 	rLearningRate   : REAL := 0.3;   // 端点学习率 (rVMax/rVMin 的步长系数)
-	rAlphaLR        : REAL := 0.4;   // α 学习率（仅正弦/三角波有效）
-	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（FALSE = 4象限参数锁定不更新）
-	bHarmEnable     : BOOL := FALSE; // 谐波 ILC 第三层使能（2~5 阶傅里叶系数学习，修被控对象段内非单调响应）
-	rHarmLR         : REAL := 0.1;   // 谐波学习率（带相位补偿后可适当大，但建议从 0.1 起步）
+	rAlphaLR        : REAL := 0.2;   // α 学习率（仅正弦/三角波有效）
+	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（FALSE = 8 段参数锁定不更新）
 	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正，同时完成波形类型检测
 END_VAR
 VAR_OUTPUT
@@ -27,19 +25,26 @@ VAR_OUTPUT
 	rVMin          : REAL;           // 虚拟谷：仿射映射的目标下端点
 	rScalePos      : REAL := 1.0;    // 诊断派生量：(rVMax - rMidpoint) / rHalfRange
 	rScaleNeg      : REAL := 1.0;    // 诊断派生量：(rMidpoint - rVMin) / rHalfRange
-	rAlpha1Cmd     : REAL := 0.25;   // Q1 指令时长占比：上升 + 低于均值
-	rAlpha2Cmd     : REAL := 0.25;   // Q2 指令时长占比：上升 + 高于均值
-	rAlpha3Cmd     : REAL := 0.25;   // Q3 指令时长占比：下降 + 高于均值
-	rAlpha4Cmd     : REAL := 0.25;   // Q4 指令时长占比：下降 + 低于均值
-	rAlphaFb       : REAL := 0.5;    // 反馈过均值时长占比 = α2_fb+α3_fb（诊断）
+	// ---- 8 段 α 时长占比（替代原 4 象限）----
+	//   1: 上升+深下 (rActual < mid - 0.5*halfRange)
+	//   2: 上升+浅下 (mid - 0.5*halfRange ≤ rActual < mid)
+	//   3: 上升+浅上 (mid ≤ rActual < mid + 0.5*halfRange)
+	//   4: 上升+深上 (rActual ≥ mid + 0.5*halfRange)
+	//   5: 下降+深上
+	//   6: 下降+浅上
+	//   7: 下降+浅下
+	//   8: 下降+深下
+	rAlphaCmd      : ARRAY [1..8] OF REAL;   // 学习得到的 cmd 8 段时长占比
+	rAlphaTgt      : ARRAY [1..8] OF REAL;   // 目标 8 段实际分布（学习参考，诊断）
+	rAlphaFb       : ARRAY [1..8] OF REAL;   // 反馈 8 段实际分布（诊断）
 	nWaveType      : INT  := 0;      // 检测到的波形类型：0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波
 	rFlatFrac      : REAL;           // 指令峰谷附近时间占比（波形类型判断依据，诊断）
 	rSymFrac       : REAL;           // 指令在均值以上时间占比（对称性，诊断：0.5=对称，偏离大→任意波）
-	rPlantPhase1   : REAL;           // 被控对象 1 阶谐波估出来的相位 θ₁（弧度，诊断）
 END_VAR
 VAR
 	rMidpoint        : REAL;
 	rHalfRange       : REAL;
+	rQuarter         : REAL;         // = 0.5 * rHalfRange，幅值四分档分界量
 	rTargetMax       : REAL;
 	rTargetMin       : REAL;
 	rActualMax       : REAL;
@@ -49,89 +54,58 @@ VAR
 	rPrevTargetRange : REAL;
 	bNewCyclePrev    : BOOL;
 	iIterCount       : INT;
-	bVInitialized    : BOOL;         // rVMax/rVMin 是否已用首个有效周期端点初始化
-	nUpdateCount     : INT;          // 当前学习窗口已累计周期数
-	rPeakErrSum      : REAL;         // 当前窗口峰误差累计
-	rValleyErrSum    : REAL;         // 当前窗口谷误差累计
+	bVInitialized    : BOOL;
+	nUpdateCount     : INT;
+	rPeakErrSum      : REAL;
+	rValleyErrSum    : REAL;
 	rErrorSum2       : REAL;
 	iErrorCount      : INT;
-	iQ1Count         : INT;
-	iQ2Count         : INT;
-	iQ3Count         : INT;
-	iQ4Count         : INT;
-	rAlpha1Fb        : REAL;
-	rAlpha2Fb        : REAL;
-	rAlpha3Fb        : REAL;
-	rAlpha4Fb        : REAL;
+	// ---- 8 段分箱计数 ----
+	iTgtBin          : ARRAY [1..8] OF INT;
+	iFbBin           : ARRAY [1..8] OF INT;
+	iBinTotal        : INT;          // 本周期内有效分箱采样总数（rHalfRange 已初始化的样本）
+	rTargetPrev      : REAL;
+	bTgtRising       : BOOL;
 	rActualPrev      : REAL;
 	bFbRising        : BOOL;
+	rTgtPos          : REAL;
+	rFbPos           : REAL;
+	iBinK            : INT;          // 分箱循环临时
+	iSegK            : INT;          // 输出段循环临时
 	rAlphaSum        : REAL;
 	rT1              : REAL;
 	rT2              : REAL;
 	rT3              : REAL;
+	rT4              : REAL;
+	rT5              : REAL;
+	rT6              : REAL;
+	rT7              : REAL;
 	rDelta           : REAL;
 	rPhi             : REAL;
 	rPhiStd          : REAL;
 	rWarpedY         : REAL;
-	rSourceTarget    : REAL;         // 仿射映射前的源波形：1/2 用 α 重建，其余直通 rTargetRaw
+	rSourceTarget    : REAL;
 	rNorm            : REAL;
 	rLimit           : REAL;
-	iNearExtCount       : INT;       // 暖机期：指令接近峰谷的采样点数（波形类型检测）
-	iTargetAboveMidCount: INT;       // 暖机期：指令在均值以上的采样点数（对称性检测）
-	iTotalDetectCount   : INT;       // 暖机期：有效检测采样总数
-	bWaveDetected       : BOOL;      // 波形类型已检测完成
-	// ---- 谐波 ILC 第三层 ----
-	// 索引 1..5：1 阶用于估被控对象相位 θ₁，2..5 阶才真正参与修正
-	// 基波（1 阶）的幅值/偏置由端点学习层负责，谐波层只用 1 阶来估相位
-	aTgtSum         : ARRAY [1..5] OF REAL;   // 当前周期：目标 k 阶余弦内积累加
-	bTgtSum         : ARRAY [1..5] OF REAL;   // 当前周期：目标 k 阶正弦内积累加
-	aActSum         : ARRAY [1..5] OF REAL;   // 当前周期：反馈 k 阶余弦内积累加
-	bActSum         : ARRAY [1..5] OF REAL;   // 当前周期：反馈 k 阶正弦内积累加
-	aHarmCorr       : ARRAY [1..5] OF REAL;   // 学到的 cmd k 阶余弦修正系数（[1] 不用，留空）
-	bHarmCorr       : ARRAY [1..5] OF REAL;   // 学到的 cmd k 阶正弦修正系数（[1] 不用，留空）
-	iHarmK          : INT;
-	rHarmAngle      : REAL;
-	rHarmCos        : REAL;
-	rHarmSin        : REAL;
-	rHarmCorrection : REAL;
-	rHarmNorm       : REAL;
-	rHarmLimit      : REAL;
-	// 相位补偿用临时量
-	rT1Re           : REAL;
-	rT1Im           : REAL;
-	rA1Re           : REAL;
-	rA1Im           : REAL;
-	rT1MagSq        : REAL;
-	rH1Re           : REAL;
-	rH1Im           : REAL;
-	rErrRe          : REAL;
-	rErrIm          : REAL;
-	rKTheta         : REAL;
-	rCosKT          : REAL;
-	rSinKT          : REAL;
-	rErrReComp      : REAL;
-	rErrImComp      : REAL;
+	rBinTotal        : REAL;         // INT_TO_REAL(iBinTotal)
+	iNearExtCount       : INT;
+	iTargetAboveMidCount: INT;
+	iTotalDetectCount   : INT;
+	bWaveDetected       : BOOL;
 END_VAR
 VAR CONSTANT
-	// α 边界：原来 0.05/0.70 会让重建波形出现"平台+尖刺"，被控对象跟不上反而塑形出反馈凸起
-	// 收紧到 0.10/0.45：最短相位段占 10% 周期（斜率 2.5×正常正弦，液压能跟），最长段不超过 45% 周期
-	// 单边占空可达 0.80/0.20，已能覆盖典型液压"上升快下降慢"的占空补偿需求
-	ALPHA_Q_MIN       : REAL := 0.10;
-	ALPHA_Q_MAX       : REAL := 0.45;
+	// 8 段 α 边界
+	// 默认 1/8 = 0.125；下界 0.05（最快段占 5% 周期，斜率 2.5× 正常，液压能跟）；
+	// 上界 0.25（最慢段占 25% 周期）
+	ALPHA_Q_MIN       : REAL := 0.05;
+	ALPHA_Q_MAX       : REAL := 0.25;
 	TWO_PI            : REAL := 6.283185307;
 	CYCLES_PER_UPDATE : INT  := 2;
-	// 波形类型判断阈值（基于指令在峰谷附近时间占比 rFlatFrac）
-	// 三角波~10%，正弦波~28%，梯形波~55%，矩形波~90%
-	FLAT_THR_TRI      : REAL := 0.15;  // < 15%   → 三角波
-	FLAT_THR_SIN      : REAL := 0.40;  // 15~40%  → 正弦波
-	FLAT_THR_TRAP     : REAL := 0.70;  // 40~70%  → 梯形波
-	                                   // > 70%   → 矩形波
-	// 端点限幅：rVMax / rVMin 距各自目标端点不超过 K * rPrevTargetRange
-	// 等价于把幅值/偏置整体放大不超过 (1 + 2K) 倍，防积分饱和
+	// 波形类型判断阈值
+	FLAT_THR_TRI      : REAL := 0.15;
+	FLAT_THR_SIN      : REAL := 0.40;
+	FLAT_THR_TRAP     : REAL := 0.70;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
-	// 谐波系数限幅：|aHarmCorr[k]|, |bHarmCorr[k]| ≤ HARM_CORR_LIMIT_K * rHalfRange
-	// 单阶谐波幅值不超过目标半幅的 30%，防个别频道发散
-	HARM_CORR_LIMIT_K : REAL := 0.3;
 END_VAR
 
 
@@ -148,24 +122,17 @@ IF bReset OR NOT bEnable THEN
         bConverged        := FALSE;
         rMidpoint         := 0.0;
         rHalfRange        := 0.0;
+        rQuarter          := 0.0;
         rPrevTargetMax    := 0.0;
         rPrevTargetMin    := 0.0;
         rPrevTargetRange  := 0.0;
-        rAlpha1Cmd        := 0.25;
-        rAlpha2Cmd        := 0.25;
-        rAlpha3Cmd        := 0.25;
-        rAlpha4Cmd        := 0.25;
-        rAlphaFb          := 0.5;
         rVMax             := 0.0;
         rVMin             := 0.0;
         rScalePos         := 1.0;
         rScaleNeg         := 1.0;
         bVInitialized     := FALSE;
-        iQ1Count          := 0;
-        iQ2Count          := 0;
-        iQ3Count          := 0;
-        iQ4Count          := 0;
         rActualPrev       := 0.0;
+        rTargetPrev       := 0.0;
         nWaveType              := 0;
         rFlatFrac              := 0.0;
         rSymFrac               := 0.0;
@@ -173,11 +140,12 @@ IF bReset OR NOT bEnable THEN
         iTargetAboveMidCount   := 0;
         iTotalDetectCount      := 0;
         bWaveDetected          := FALSE;
-        FOR iHarmK := 1 TO 5 DO
-            aHarmCorr[iHarmK] := 0.0;
-            bHarmCorr[iHarmK] := 0.0;
+        // 8 段 α 默认均分 1/8 = 0.125（透传基底）
+        FOR iBinK := 1 TO 8 DO
+            rAlphaCmd[iBinK] := 0.125;
+            rAlphaTgt[iBinK] := 0.125;
+            rAlphaFb[iBinK]  := 0.125;
         END_FOR
-        rPlantPhase1 := 0.0;
     END_IF
     rOutput        := 0.0;
     rVirtualTarget := 0.0;
@@ -187,17 +155,12 @@ IF bReset OR NOT bEnable THEN
     rActualMin     :=  1.0E30;
     rErrorSum2     := 0.0;
     iErrorCount    := 0;
-    iQ1Count       := 0;
-    iQ2Count       := 0;
-    iQ3Count       := 0;
-    iQ4Count       := 0;
-    bNewCyclePrev  := FALSE;
-    FOR iHarmK := 1 TO 5 DO
-        aTgtSum[iHarmK] := 0.0;
-        bTgtSum[iHarmK] := 0.0;
-        aActSum[iHarmK] := 0.0;
-        bActSum[iHarmK] := 0.0;
+    iBinTotal      := 0;
+    FOR iBinK := 1 TO 8 DO
+        iTgtBin[iBinK] := 0;
+        iFbBin[iBinK]  := 0;
     END_FOR
+    bNewCyclePrev  := FALSE;
     IF NOT bEnable THEN
         RETURN;
     END_IF
@@ -219,25 +182,29 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     rErrorSum2  := 0.0;
     iErrorCount := 0;
 
-    // 4 象限 α_fb 计算
-    rAlphaSum := INT_TO_REAL(iQ1Count + iQ2Count + iQ3Count + iQ4Count);
-    IF rAlphaSum > 0.0 THEN
-        rAlpha1Fb := INT_TO_REAL(iQ1Count) / rAlphaSum;
-        rAlpha2Fb := INT_TO_REAL(iQ2Count) / rAlphaSum;
-        rAlpha3Fb := INT_TO_REAL(iQ3Count) / rAlphaSum;
-        rAlpha4Fb := INT_TO_REAL(iQ4Count) / rAlphaSum;
-        rAlphaFb  := rAlpha2Fb + rAlpha3Fb;
+    // 8 段分布归一（目标 / 反馈各自）
+    IF iBinTotal > 0 THEN
+        rBinTotal := INT_TO_REAL(iBinTotal);
+        FOR iBinK := 1 TO 8 DO
+            rAlphaTgt[iBinK] := INT_TO_REAL(iTgtBin[iBinK]) / rBinTotal;
+            rAlphaFb[iBinK]  := INT_TO_REAL(iFbBin[iBinK])  / rBinTotal;
+        END_FOR
     END_IF
-    iQ1Count := 0; iQ2Count := 0; iQ3Count := 0; iQ4Count := 0;
+    FOR iBinK := 1 TO 8 DO
+        iTgtBin[iBinK] := 0;
+        iFbBin[iBinK]  := 0;
+    END_FOR
+    iBinTotal := 0;
 
-    // 端点误差：cmd 与 fb 各自一周期的峰、谷直接对比
+    // 端点误差
     rPeakError   := rTargetMax - rActualMax;
     rValleyError := rTargetMin - rActualMin;
 
-    // rMidpoint / rHalfRange 仍由 cmd 计算，供波形检测、α 学习、4 象限分类、诊断输出使用
+    // rMidpoint / rHalfRange / rQuarter
     rMidpoint  := (rTargetMax + rTargetMin) / 2.0;
     rHalfRange := (rTargetMax - rTargetMin) / 2.0;
     IF rHalfRange < 0.001 THEN rHalfRange := 0.001; END_IF
+    rQuarter   := 0.5 * rHalfRange;
 
     rPrevTargetMax   := rTargetMax;
     rPrevTargetMin   := rTargetMin;
@@ -256,25 +223,23 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             rSymFrac  := INT_TO_REAL(iTargetAboveMidCount) / INT_TO_REAL(iTotalDetectCount);
 
             IF rSymFrac < 0.35 OR rSymFrac > 0.65 THEN
-                nWaveType := 5;      // 任意波：波形不对称
+                nWaveType := 5;
             ELSIF rFlatFrac > FLAT_THR_TRAP THEN
-                nWaveType := 4;      // 矩形波：峰谷附近>70%
+                nWaveType := 4;
             ELSIF rFlatFrac > FLAT_THR_SIN THEN
-                nWaveType := 3;      // 梯形波：40~70%
+                nWaveType := 3;
             ELSIF rFlatFrac > FLAT_THR_TRI THEN
-                nWaveType := 1;      // 正弦波：15~40%
+                nWaveType := 1;
             ELSE
-                nWaveType := 2;      // 三角波：<15%
+                nWaveType := 2;
             END_IF
             bWaveDetected := TRUE;
         END_IF
-        // 暖机期清空学习窗口
-        nUpdateCount   := 0;
-        rPeakErrSum    := 0.0;
-        rValleyErrSum  := 0.0;
+        nUpdateCount  := 0;
+        rPeakErrSum   := 0.0;
+        rValleyErrSum := 0.0;
 
     ELSIF NOT bConverged THEN
-        // 出暖机首次：用首个有效周期的目标端点初始化 rVMax / rVMin（等效透传）
         IF NOT bVInitialized THEN
             rVMax := rPrevTargetMax;
             rVMin := rPrevTargetMin;
@@ -284,42 +249,34 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         IF iMaxIterations > 0 AND iIterCount >= iMaxIterations THEN
             bConverged := TRUE;
         ELSE
-            // ---- α 4 象限自学习（仅正弦/三角，nWaveType=1或2）----
+            // ---- 8 段 α 自学习（仅正弦/三角 nWaveType=1/2）----
+            // 参考使用目标自身分布 rAlphaTgt[k]，不是写死 1/8——这样正弦的非均匀分布
+            // (0.167, 0.083, 0.083, 0.167, ...) 也是合法的稳态点
             IF bAlphaEnable AND (nWaveType = 1 OR nWaveType = 2) THEN
-                rAlpha1Cmd := rAlpha1Cmd + rAlphaLR * (0.25 - rAlpha1Fb);
-                rAlpha2Cmd := rAlpha2Cmd + rAlphaLR * (0.25 - rAlpha2Fb);
-                rAlpha3Cmd := rAlpha3Cmd + rAlphaLR * (0.25 - rAlpha3Fb);
-                rAlpha4Cmd := rAlpha4Cmd + rAlphaLR * (0.25 - rAlpha4Fb);
-                IF rAlpha1Cmd < ALPHA_Q_MIN THEN rAlpha1Cmd := ALPHA_Q_MIN; END_IF
-                IF rAlpha1Cmd > ALPHA_Q_MAX THEN rAlpha1Cmd := ALPHA_Q_MAX; END_IF
-                IF rAlpha2Cmd < ALPHA_Q_MIN THEN rAlpha2Cmd := ALPHA_Q_MIN; END_IF
-                IF rAlpha2Cmd > ALPHA_Q_MAX THEN rAlpha2Cmd := ALPHA_Q_MAX; END_IF
-                IF rAlpha3Cmd < ALPHA_Q_MIN THEN rAlpha3Cmd := ALPHA_Q_MIN; END_IF
-                IF rAlpha3Cmd > ALPHA_Q_MAX THEN rAlpha3Cmd := ALPHA_Q_MAX; END_IF
-                IF rAlpha4Cmd < ALPHA_Q_MIN THEN rAlpha4Cmd := ALPHA_Q_MIN; END_IF
-                IF rAlpha4Cmd > ALPHA_Q_MAX THEN rAlpha4Cmd := ALPHA_Q_MAX; END_IF
-                rAlphaSum := rAlpha1Cmd + rAlpha2Cmd + rAlpha3Cmd + rAlpha4Cmd;
+                FOR iBinK := 1 TO 8 DO
+                    rAlphaCmd[iBinK] := rAlphaCmd[iBinK]
+                                     + rAlphaLR * (rAlphaTgt[iBinK] - rAlphaFb[iBinK]);
+                    IF rAlphaCmd[iBinK] < ALPHA_Q_MIN THEN rAlphaCmd[iBinK] := ALPHA_Q_MIN; END_IF
+                    IF rAlphaCmd[iBinK] > ALPHA_Q_MAX THEN rAlphaCmd[iBinK] := ALPHA_Q_MAX; END_IF
+                END_FOR
+                rAlphaSum := 0.0;
+                FOR iBinK := 1 TO 8 DO
+                    rAlphaSum := rAlphaSum + rAlphaCmd[iBinK];
+                END_FOR
                 IF rAlphaSum > 0.001 THEN
-                    rAlpha1Cmd := rAlpha1Cmd / rAlphaSum;
-                    rAlpha2Cmd := rAlpha2Cmd / rAlphaSum;
-                    rAlpha3Cmd := rAlpha3Cmd / rAlphaSum;
-                    rAlpha4Cmd := rAlpha4Cmd / rAlphaSum;
+                    FOR iBinK := 1 TO 8 DO
+                        rAlphaCmd[iBinK] := rAlphaCmd[iBinK] / rAlphaSum;
+                    END_FOR
                 END_IF
             END_IF
 
             // ---- 端点幅值自学习（加法型，所有波形通用）----
-            //   rVMax += LR * (rTargetMax - rActualMax)   // 反馈峰不够高 → 抬虚拟峰
-            //   rVMin += LR * (rTargetMin - rActualMin)   // 反馈谷不够低 → 压虚拟谷
-            //   优点：上下端点独立学，自然解耦幅值与 DC 偏置；不依赖反馈相对 cmd 中点的位置
             rPeakErrSum   := rPeakErrSum   + rPeakError;
             rValleyErrSum := rValleyErrSum + rValleyError;
             nUpdateCount  := nUpdateCount  + 1;
             IF nUpdateCount >= CYCLES_PER_UPDATE THEN
                 rVMax := rVMax + rLearningRate * (rPeakErrSum   / INT_TO_REAL(nUpdateCount));
                 rVMin := rVMin + rLearningRate * (rValleyErrSum / INT_TO_REAL(nUpdateCount));
-
-                // 端点限幅：|rVMax-rTargetMax|, |rVMin-rTargetMin| ≤ K*range
-                // 作用：物理饱和时防积分饱和，等价于老 SCALE_MAX
                 IF rPrevTargetRange > 0.001 THEN
                     rLimit := V_RANGE_LIMIT_K * rPrevTargetRange;
                     IF rVMax > rPrevTargetMax + rLimit THEN rVMax := rPrevTargetMax + rLimit; END_IF
@@ -327,70 +284,17 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                     IF rVMin > rPrevTargetMin + rLimit THEN rVMin := rPrevTargetMin + rLimit; END_IF
                     IF rVMin < rPrevTargetMin - rLimit THEN rVMin := rPrevTargetMin - rLimit; END_IF
                 END_IF
-                // 防 vMax/vMin 倒挂（极端误差下可能发生）
                 IF rVMax <= rVMin + 0.001 THEN
                     rVMax := rVMin + 0.001;
                 END_IF
-
                 rPeakErrSum   := 0.0;
                 rValleyErrSum := 0.0;
                 nUpdateCount  := 0;
             END_IF
-
-            // ---- 谐波 ILC 第三层自学习（2~5 阶傅里叶系数 + 被控对象相位补偿）----
-            //   1) 由本周期 1 阶谐波估被控对象相位 θ₁ = arg(A₁ / T₁)
-            //   2) 按"被控对象近似纯延迟"假设，k 阶相移 ≈ k · θ₁
-            //   3) 把 (T_k - A_k) 反向旋转 k·θ₁ 后再做更新，保证学习方向永远跟物理增益同号
-            //   4) 即便高阶幅值衰减很大，只是学得慢，不会发散（这是相比无补偿版本的关键差别）
-            IF bHarmEnable AND rPrevTargetRange > 0.001 AND iPointsPerCycle > 0 THEN
-                rHarmNorm  := 2.0 / INT_TO_REAL(iPointsPerCycle);
-                rHarmLimit := HARM_CORR_LIMIT_K * rHalfRange;
-
-                // 估被控对象 1 阶相位：θ₁ = arg(A₁ · conj(T₁)) （省了 |T₁|² 除法，atan2 与尺度无关）
-                rT1Re := aTgtSum[1] * rHarmNorm;
-                rT1Im := bTgtSum[1] * rHarmNorm;
-                rA1Re := aActSum[1] * rHarmNorm;
-                rA1Im := bActSum[1] * rHarmNorm;
-                rT1MagSq := rT1Re * rT1Re + rT1Im * rT1Im;
-                IF rT1MagSq > 0.0001 THEN
-                    rH1Re := rA1Re * rT1Re + rA1Im * rT1Im;   // Re(A₁ · conj(T₁))
-                    rH1Im := rA1Im * rT1Re - rA1Re * rT1Im;   // Im(A₁ · conj(T₁))
-                    rPlantPhase1 := ATAN2(rH1Im, rH1Re);
-                END_IF
-                // T₁ 太小（目标几乎是 DC）时保持上一次的 θ₁
-
-                FOR iHarmK := 2 TO 5 DO
-                    rErrRe := (aTgtSum[iHarmK] - aActSum[iHarmK]) * rHarmNorm;
-                    rErrIm := (bTgtSum[iHarmK] - bActSum[iHarmK]) * rHarmNorm;
-
-                    // 旋转误差 -k·θ₁，等价于乘 exp(-j·k·θ₁) = cos(k·θ₁) - j·sin(k·θ₁)
-                    rKTheta := INT_TO_REAL(iHarmK) * rPlantPhase1;
-                    rCosKT  := COS(rKTheta);
-                    rSinKT  := SIN(rKTheta);
-                    rErrReComp := rErrRe * rCosKT + rErrIm * rSinKT;
-                    rErrImComp := rErrIm * rCosKT - rErrRe * rSinKT;
-
-                    aHarmCorr[iHarmK] := aHarmCorr[iHarmK] + rHarmLR * rErrReComp;
-                    bHarmCorr[iHarmK] := bHarmCorr[iHarmK] + rHarmLR * rErrImComp;
-
-                    IF aHarmCorr[iHarmK] >  rHarmLimit THEN aHarmCorr[iHarmK] :=  rHarmLimit; END_IF
-                    IF aHarmCorr[iHarmK] < -rHarmLimit THEN aHarmCorr[iHarmK] := -rHarmLimit; END_IF
-                    IF bHarmCorr[iHarmK] >  rHarmLimit THEN bHarmCorr[iHarmK] :=  rHarmLimit; END_IF
-                    IF bHarmCorr[iHarmK] < -rHarmLimit THEN bHarmCorr[iHarmK] := -rHarmLimit; END_IF
-                END_FOR
-            END_IF
         END_IF
     END_IF
 
-    // 重置谐波内积累加器（每周期开始重新积分）
-    FOR iHarmK := 1 TO 5 DO
-        aTgtSum[iHarmK] := 0.0;
-        bTgtSum[iHarmK] := 0.0;
-        aActSum[iHarmK] := 0.0;
-        bActSum[iHarmK] := 0.0;
-    END_FOR
-
-    // 诊断派生量：保留 rScalePos / rScaleNeg 给上位机看
+    // 诊断派生量
     IF rHalfRange > 0.001 AND bVInitialized THEN
         rScalePos := (rVMax - rMidpoint) / rHalfRange;
         rScaleNeg := (rMidpoint - rVMin) / rHalfRange;
@@ -402,7 +306,7 @@ END_IF
 // 每个采样点
 // ============================================================
 
-// 周期相位 rPhi（供谐波累加与正弦/三角重建共用）
+// 周期相位
 IF iPointsPerCycle > 0 THEN
     rPhi := INT_TO_REAL(iPointIndex) / INT_TO_REAL(iPointsPerCycle);
 ELSE
@@ -413,29 +317,13 @@ IF rPhi > 1.0 THEN rPhi := 1.0; END_IF
 
 IF rTargetRaw > rTargetMax THEN rTargetMax := rTargetRaw; END_IF
 IF rTargetRaw < rTargetMin THEN rTargetMin := rTargetRaw; END_IF
-IF rActual > rActualMax THEN rActualMax := rActual; END_IF
-IF rActual < rActualMin THEN rActualMin := rActual; END_IF
-
-// ---- 谐波内积累加（仅当 bHarmEnable 开启时执行，省 CPU）----
-// 累加范围 1~5：1 阶用于估被控对象相位 θ₁；2~5 阶才真正参与修正
-// 周期边界处归一为本周期的傅里叶系数 a_k, b_k
-IF bHarmEnable THEN
-    FOR iHarmK := 1 TO 5 DO
-        rHarmAngle := TWO_PI * INT_TO_REAL(iHarmK) * rPhi;
-        rHarmCos   := COS(rHarmAngle);
-        rHarmSin   := SIN(rHarmAngle);
-        aTgtSum[iHarmK] := aTgtSum[iHarmK] + rTargetRaw * rHarmCos;
-        bTgtSum[iHarmK] := bTgtSum[iHarmK] + rTargetRaw * rHarmSin;
-        aActSum[iHarmK] := aActSum[iHarmK] + rActual    * rHarmCos;
-        bActSum[iHarmK] := bActSum[iHarmK] + rActual    * rHarmSin;
-    END_FOR
-END_IF
+IF rActual    > rActualMax THEN rActualMax := rActual;    END_IF
+IF rActual    < rActualMin THEN rActualMin := rActual;    END_IF
 
 rErrorSum2  := rErrorSum2 + (rTargetRaw - rActual) * (rTargetRaw - rActual);
 iErrorCount := iErrorCount + 1;
 
-// ---- 波形类型检测：统计指令在峰谷附近(|target-mid| > 90%*halfRange)的时间占比 ----
-// 从 iIterCount>=1 开始（rMidpoint/rHalfRange 已由第一个周期数据初始化）
+// ---- 波形类型检测 ----
 IF NOT bWaveDetected AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
     iTotalDetectCount := iTotalDetectCount + 1;
     IF ABS(rTargetRaw - rMidpoint) > 0.9 * rHalfRange THEN
@@ -446,26 +334,49 @@ IF NOT bWaveDetected AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
     END_IF
 END_IF
 
-// 4 象限反馈采样（仅供 α 学习与诊断；不参与端点学习）
-IF rActual >= rActualPrev THEN
-    bFbRising := TRUE;
-ELSE
-    bFbRising := FALSE;
-END_IF
+// ---- 方向检测（目标 / 反馈各自）----
+IF rTargetRaw >= rTargetPrev THEN bTgtRising := TRUE; ELSE bTgtRising := FALSE; END_IF
+rTargetPrev := rTargetRaw;
+IF rActual   >= rActualPrev THEN bFbRising  := TRUE; ELSE bFbRising  := FALSE; END_IF
 rActualPrev := rActual;
 
-IF bFbRising THEN
-    IF rActual < rMidpoint THEN
-        iQ1Count := iQ1Count + 1;
+// ---- 8 段分箱（rHalfRange 已由上一周期初始化后才生效）----
+IF iIterCount >= 1 AND rHalfRange > 0.001 THEN
+    iBinTotal := iBinTotal + 1;
+
+    // 目标分箱
+    rTgtPos := rTargetRaw - rMidpoint;
+    IF bTgtRising THEN
+        IF      rTgtPos < -rQuarter THEN iBinK := 1;
+        ELSIF   rTgtPos <  0.0      THEN iBinK := 2;
+        ELSIF   rTgtPos <  rQuarter THEN iBinK := 3;
+        ELSE                              iBinK := 4;
+        END_IF
     ELSE
-        iQ2Count := iQ2Count + 1;
+        IF      rTgtPos >  rQuarter THEN iBinK := 5;
+        ELSIF   rTgtPos >  0.0      THEN iBinK := 6;
+        ELSIF   rTgtPos > -rQuarter THEN iBinK := 7;
+        ELSE                              iBinK := 8;
+        END_IF
     END_IF
-ELSE
-    IF rActual >= rMidpoint THEN
-        iQ3Count := iQ3Count + 1;
+    iTgtBin[iBinK] := iTgtBin[iBinK] + 1;
+
+    // 反馈分箱
+    rFbPos := rActual - rMidpoint;
+    IF bFbRising THEN
+        IF      rFbPos < -rQuarter THEN iBinK := 1;
+        ELSIF   rFbPos <  0.0      THEN iBinK := 2;
+        ELSIF   rFbPos <  rQuarter THEN iBinK := 3;
+        ELSE                             iBinK := 4;
+        END_IF
     ELSE
-        iQ4Count := iQ4Count + 1;
+        IF      rFbPos >  rQuarter THEN iBinK := 5;
+        ELSIF   rFbPos >  0.0      THEN iBinK := 6;
+        ELSIF   rFbPos > -rQuarter THEN iBinK := 7;
+        ELSE                             iBinK := 8;
+        END_IF
     END_IF
+    iFbBin[iBinK] := iFbBin[iBinK] + 1;
 END_IF
 
 // ============================================================
@@ -481,40 +392,71 @@ IF iIterCount <= nWarmupCycles OR NOT bVInitialized OR rPrevTargetRange < 0.001 
 END_IF
 
 // ---- 源波形 rSourceTarget ----
-//   正弦(1)/三角(2)：用 α 4 段重建标准基底，得到去噪后的 rSourceTarget
-//   梯形(3)/矩形(4)/任意波(5)：直接用 rTargetRaw 作源（不假设波形形状）
+//   正弦(1)/三角(2)：用 8 段 α 重建标准基底
+//   其余：直通 rTargetRaw
 IF nWaveType = 1 OR nWaveType = 2 THEN
-    // rPhi 已在每个采样点开始处算好
-    rT1 := rAlpha1Cmd;
-    rT2 := rT1 + rAlpha2Cmd;
-    rT3 := rT2 + rAlpha3Cmd;
+    rT1 := rAlphaCmd[1];
+    rT2 := rT1 + rAlphaCmd[2];
+    rT3 := rT2 + rAlphaCmd[3];
+    rT4 := rT3 + rAlphaCmd[4];
+    rT5 := rT4 + rAlphaCmd[5];
+    rT6 := rT5 + rAlphaCmd[6];
+    rT7 := rT6 + rAlphaCmd[7];
 
     IF rPhi < rT1 THEN
         IF rT1 > 0.001 THEN
-            rPhiStd := rPhi / rT1 * 0.25;
+            rPhiStd := rPhi / rT1 * 0.125;
         ELSE
             rPhiStd := 0.0;
         END_IF
     ELSIF rPhi < rT2 THEN
         rDelta := rT2 - rT1;
         IF rDelta > 0.001 THEN
-            rPhiStd := 0.25 + (rPhi - rT1) / rDelta * 0.25;
+            rPhiStd := 0.125 + (rPhi - rT1) / rDelta * 0.125;
         ELSE
-            rPhiStd := 0.25;
+            rPhiStd := 0.125;
         END_IF
     ELSIF rPhi < rT3 THEN
         rDelta := rT3 - rT2;
         IF rDelta > 0.001 THEN
-            rPhiStd := 0.50 + (rPhi - rT2) / rDelta * 0.25;
+            rPhiStd := 0.250 + (rPhi - rT2) / rDelta * 0.125;
         ELSE
-            rPhiStd := 0.50;
+            rPhiStd := 0.250;
+        END_IF
+    ELSIF rPhi < rT4 THEN
+        rDelta := rT4 - rT3;
+        IF rDelta > 0.001 THEN
+            rPhiStd := 0.375 + (rPhi - rT3) / rDelta * 0.125;
+        ELSE
+            rPhiStd := 0.375;
+        END_IF
+    ELSIF rPhi < rT5 THEN
+        rDelta := rT5 - rT4;
+        IF rDelta > 0.001 THEN
+            rPhiStd := 0.500 + (rPhi - rT4) / rDelta * 0.125;
+        ELSE
+            rPhiStd := 0.500;
+        END_IF
+    ELSIF rPhi < rT6 THEN
+        rDelta := rT6 - rT5;
+        IF rDelta > 0.001 THEN
+            rPhiStd := 0.625 + (rPhi - rT5) / rDelta * 0.125;
+        ELSE
+            rPhiStd := 0.625;
+        END_IF
+    ELSIF rPhi < rT7 THEN
+        rDelta := rT7 - rT6;
+        IF rDelta > 0.001 THEN
+            rPhiStd := 0.750 + (rPhi - rT6) / rDelta * 0.125;
+        ELSE
+            rPhiStd := 0.750;
         END_IF
     ELSE
-        rDelta := 1.0 - rT3;
+        rDelta := 1.0 - rT7;
         IF rDelta > 0.001 THEN
-            rPhiStd := 0.75 + (rPhi - rT3) / rDelta * 0.25;
+            rPhiStd := 0.875 + (rPhi - rT7) / rDelta * 0.125;
         ELSE
-            rPhiStd := 0.75;
+            rPhiStd := 0.875;
         END_IF
     END_IF
 
@@ -533,24 +475,9 @@ ELSE
     rSourceTarget := rTargetRaw;
 END_IF
 
-// ---- 统一仿射重映射 [rPrevTargetMin, rPrevTargetMax] → [rVMin, rVMax] ----
-// 形状严格保留，端点替换为学到的虚拟峰/谷
+// 仿射重映射
 rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
-
-// ---- 谐波 ILC 第三层修正叠加（仅 bHarmEnable 开启时） ----
-// 形状细节通过 2~5 阶傅里叶系数补到 rVirtualTarget 上
-// 注意：基波（1 阶）由端点学习层负责，这里不补，避免与 rVMin/rVMax 冲突
-IF bHarmEnable THEN
-    rHarmCorrection := 0.0;
-    FOR iHarmK := 2 TO 5 DO
-        rHarmAngle      := TWO_PI * INT_TO_REAL(iHarmK) * rPhi;
-        rHarmCorrection := rHarmCorrection
-            + aHarmCorr[iHarmK] * COS(rHarmAngle)
-            + bHarmCorr[iHarmK] * SIN(rHarmAngle);
-    END_FOR
-    rVirtualTarget := rVirtualTarget + rHarmCorrection;
-END_IF
 
 rOutput := rVirtualTarget - rTargetRaw;
 
