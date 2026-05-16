@@ -271,25 +271,22 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             IF nScaleCycleCount >= CYCLES_PER_UPDATE THEN
                 rAmpFbPos := rAmpFbPosSum / INT_TO_REAL(nScaleCycleCount);
                 rAmpFbNeg := rAmpFbNegSum / INT_TO_REAL(nScaleCycleCount);
-                // 上半：饱和判定细分指令是否已过冲（rScalePos > 1）
-                //   - 饱和 + 过冲：指令超过目标导致削顶 → 缩小 rScalePos
-                //   - 饱和 + 未过冲：系统物理触顶 → 保持不变（再缩小只让反馈更够不到目标）
-                //   - 无饱和：按幅值比律学习
+                // 上半：饱和门控仅在已过冲(rScale>1)时生效，避免欠幅时被假阳性饱和冻结
+                //   - rScalePos>1 且饱和：指令超过目标导致削顶 → 缩小
+                //   - 其余情况（含 rScale≤1 时的"饱和"假阳性）：按幅值比律正常学习
+                //   注：rAmpFbPos 作为反馈近峰基准本身是波形相关的，反馈圆顿时会假阳性，
+                //   故只信任过冲方向的饱和判定；欠幅方向以幅值比为准持续追平
                 IF rAmpFbPos > 0.001 THEN
-                    IF rTopSatRatio > SAT_TOL THEN
-                        IF rScalePos > 1.0 THEN
-                            rScalePos := rScalePos * (1.0 - rLearningRate * rTopSatRatio);
-                        END_IF
+                    IF rTopSatRatio > SAT_TOL AND rScalePos > 1.0 THEN
+                        rScalePos := rScalePos * (1.0 - rLearningRate * rTopSatRatio);
                     ELSE
                         rScalePos := rScalePos * (1.0 + rLearningRate * (rHalfRange / rAmpFbPos - 1.0));
                     END_IF
                 END_IF
-                // 下半：同理（rScaleNeg > 1 表示指令已贴到目标底之下）
+                // 下半：同上策略（修复底部圆顿够不到最低点的问题）
                 IF rAmpFbNeg > 0.001 THEN
-                    IF rBotSatRatio > SAT_TOL THEN
-                        IF rScaleNeg > 1.0 THEN
-                            rScaleNeg := rScaleNeg * (1.0 - rLearningRate * rBotSatRatio);
-                        END_IF
+                    IF rBotSatRatio > SAT_TOL AND rScaleNeg > 1.0 THEN
+                        rScaleNeg := rScaleNeg * (1.0 - rLearningRate * rBotSatRatio);
                     ELSE
                         rScaleNeg := rScaleNeg * (1.0 + rLearningRate * (rHalfRange / rAmpFbNeg - 1.0));
                     END_IF
