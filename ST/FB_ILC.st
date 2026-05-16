@@ -79,8 +79,11 @@ VAR
 	bWaveDetected       : BOOL;      // 波形类型已检测完成
 END_VAR
 VAR CONSTANT
-	ALPHA_Q_MIN       : REAL := 0.05;
-	ALPHA_Q_MAX       : REAL := 0.70;
+	// α 边界：原来 0.05/0.70 会让重建波形出现"平台+尖刺"，被控对象跟不上反而塑形出反馈凸起
+	// 收紧到 0.10/0.45：最短相位段占 10% 周期（斜率 2.5×正常正弦，液压能跟），最长段不超过 45% 周期
+	// 单边占空可达 0.80/0.20，已能覆盖典型液压"上升快下降慢"的占空补偿需求
+	ALPHA_Q_MIN       : REAL := 0.10;
+	ALPHA_Q_MAX       : REAL := 0.45;
 	TWO_PI            : REAL := 6.283185307;
 	CYCLES_PER_UPDATE : INT  := 2;
 	// 波形类型判断阈值（基于指令在峰谷附近时间占比 rFlatFrac）
