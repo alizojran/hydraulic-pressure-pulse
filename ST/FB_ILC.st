@@ -12,7 +12,7 @@ VAR_INPUT
 	rAlphaLR        : REAL := 0.4;   // α 学习率（仅正弦/三角波有效）
 	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（FALSE = 4象限参数锁定不更新）
 	bHarmEnable     : BOOL := FALSE; // 谐波 ILC 第三层使能（2~5 阶傅里叶系数学习，修被控对象段内非单调响应）
-	rHarmLR         : REAL := 0.2;   // 谐波学习率
+	rHarmLR         : REAL := 0.1;   // 谐波学习率（带相位补偿后可适当大，但建议从 0.1 起步）
 	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正，同时完成波形类型检测
 END_VAR
 VAR_OUTPUT
@@ -35,6 +35,7 @@ VAR_OUTPUT
 	nWaveType      : INT  := 0;      // 检测到的波形类型：0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波
 	rFlatFrac      : REAL;           // 指令峰谷附近时间占比（波形类型判断依据，诊断）
 	rSymFrac       : REAL;           // 指令在均值以上时间占比（对称性，诊断：0.5=对称，偏离大→任意波）
+	rPlantPhase1   : REAL;           // 被控对象 1 阶谐波估出来的相位 θ₁（弧度，诊断）
 END_VAR
 VAR
 	rMidpoint        : REAL;
@@ -80,13 +81,14 @@ VAR
 	iTotalDetectCount   : INT;       // 暖机期：有效检测采样总数
 	bWaveDetected       : BOOL;      // 波形类型已检测完成
 	// ---- 谐波 ILC 第三层 ----
-	// 索引 2..5 对应 2~5 阶谐波；基波（1 阶）交给端点学习层，不在这里学
-	aTgtSum         : ARRAY [2..5] OF REAL;   // 当前周期：目标 k 阶余弦内积累加
-	bTgtSum         : ARRAY [2..5] OF REAL;   // 当前周期：目标 k 阶正弦内积累加
-	aActSum         : ARRAY [2..5] OF REAL;   // 当前周期：反馈 k 阶余弦内积累加
-	bActSum         : ARRAY [2..5] OF REAL;   // 当前周期：反馈 k 阶正弦内积累加
-	aHarmCorr       : ARRAY [2..5] OF REAL;   // 学到的 cmd k 阶余弦修正系数（持久）
-	bHarmCorr       : ARRAY [2..5] OF REAL;   // 学到的 cmd k 阶正弦修正系数（持久）
+	// 索引 1..5：1 阶用于估被控对象相位 θ₁，2..5 阶才真正参与修正
+	// 基波（1 阶）的幅值/偏置由端点学习层负责，谐波层只用 1 阶来估相位
+	aTgtSum         : ARRAY [1..5] OF REAL;   // 当前周期：目标 k 阶余弦内积累加
+	bTgtSum         : ARRAY [1..5] OF REAL;   // 当前周期：目标 k 阶正弦内积累加
+	aActSum         : ARRAY [1..5] OF REAL;   // 当前周期：反馈 k 阶余弦内积累加
+	bActSum         : ARRAY [1..5] OF REAL;   // 当前周期：反馈 k 阶正弦内积累加
+	aHarmCorr       : ARRAY [1..5] OF REAL;   // 学到的 cmd k 阶余弦修正系数（[1] 不用，留空）
+	bHarmCorr       : ARRAY [1..5] OF REAL;   // 学到的 cmd k 阶正弦修正系数（[1] 不用，留空）
 	iHarmK          : INT;
 	rHarmAngle      : REAL;
 	rHarmCos        : REAL;
@@ -94,10 +96,21 @@ VAR
 	rHarmCorrection : REAL;
 	rHarmNorm       : REAL;
 	rHarmLimit      : REAL;
-	rATgt           : REAL;
-	rBTgt           : REAL;
-	rAAct           : REAL;
-	rBAct           : REAL;
+	// 相位补偿用临时量
+	rT1Re           : REAL;
+	rT1Im           : REAL;
+	rA1Re           : REAL;
+	rA1Im           : REAL;
+	rT1MagSq        : REAL;
+	rH1Re           : REAL;
+	rH1Im           : REAL;
+	rErrRe          : REAL;
+	rErrIm          : REAL;
+	rKTheta         : REAL;
+	rCosKT          : REAL;
+	rSinKT          : REAL;
+	rErrReComp      : REAL;
+	rErrImComp      : REAL;
 END_VAR
 VAR CONSTANT
 	// α 边界：原来 0.05/0.70 会让重建波形出现"平台+尖刺"，被控对象跟不上反而塑形出反馈凸起
@@ -160,10 +173,11 @@ IF bReset OR NOT bEnable THEN
         iTargetAboveMidCount   := 0;
         iTotalDetectCount      := 0;
         bWaveDetected          := FALSE;
-        FOR iHarmK := 2 TO 5 DO
+        FOR iHarmK := 1 TO 5 DO
             aHarmCorr[iHarmK] := 0.0;
             bHarmCorr[iHarmK] := 0.0;
         END_FOR
+        rPlantPhase1 := 0.0;
     END_IF
     rOutput        := 0.0;
     rVirtualTarget := 0.0;
@@ -178,7 +192,7 @@ IF bReset OR NOT bEnable THEN
     iQ3Count       := 0;
     iQ4Count       := 0;
     bNewCyclePrev  := FALSE;
-    FOR iHarmK := 2 TO 5 DO
+    FOR iHarmK := 1 TO 5 DO
         aTgtSum[iHarmK] := 0.0;
         bTgtSum[iHarmK] := 0.0;
         aActSum[iHarmK] := 0.0;
@@ -323,21 +337,42 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 nUpdateCount  := 0;
             END_IF
 
-            // ---- 谐波 ILC 第三层自学习（2~5 阶傅里叶系数）----
-            // 用累计的内积 (∫signal·cos/sin) 算出本周期目标/反馈各阶谐波系数（×2/N 归一）
-            // 更新法则：c_k_cos += LR · (a_k_tgt - a_k_act)，正弦同理
-            // 输出时 Σ c_k · 谐波_k(rPhi) 加到 rVirtualTarget
-            // 修被控对象段内非单调响应（凸起、台阶），是 4 段 α 无法表达的形状细节
+            // ---- 谐波 ILC 第三层自学习（2~5 阶傅里叶系数 + 被控对象相位补偿）----
+            //   1) 由本周期 1 阶谐波估被控对象相位 θ₁ = arg(A₁ / T₁)
+            //   2) 按"被控对象近似纯延迟"假设，k 阶相移 ≈ k · θ₁
+            //   3) 把 (T_k - A_k) 反向旋转 k·θ₁ 后再做更新，保证学习方向永远跟物理增益同号
+            //   4) 即便高阶幅值衰减很大，只是学得慢，不会发散（这是相比无补偿版本的关键差别）
             IF bHarmEnable AND rPrevTargetRange > 0.001 AND iPointsPerCycle > 0 THEN
                 rHarmNorm  := 2.0 / INT_TO_REAL(iPointsPerCycle);
                 rHarmLimit := HARM_CORR_LIMIT_K * rHalfRange;
+
+                // 估被控对象 1 阶相位：θ₁ = arg(A₁ · conj(T₁)) （省了 |T₁|² 除法，atan2 与尺度无关）
+                rT1Re := aTgtSum[1] * rHarmNorm;
+                rT1Im := bTgtSum[1] * rHarmNorm;
+                rA1Re := aActSum[1] * rHarmNorm;
+                rA1Im := bActSum[1] * rHarmNorm;
+                rT1MagSq := rT1Re * rT1Re + rT1Im * rT1Im;
+                IF rT1MagSq > 0.0001 THEN
+                    rH1Re := rA1Re * rT1Re + rA1Im * rT1Im;   // Re(A₁ · conj(T₁))
+                    rH1Im := rA1Im * rT1Re - rA1Re * rT1Im;   // Im(A₁ · conj(T₁))
+                    rPlantPhase1 := ATAN2(rH1Im, rH1Re);
+                END_IF
+                // T₁ 太小（目标几乎是 DC）时保持上一次的 θ₁
+
                 FOR iHarmK := 2 TO 5 DO
-                    rATgt := aTgtSum[iHarmK] * rHarmNorm;
-                    rBTgt := bTgtSum[iHarmK] * rHarmNorm;
-                    rAAct := aActSum[iHarmK] * rHarmNorm;
-                    rBAct := bActSum[iHarmK] * rHarmNorm;
-                    aHarmCorr[iHarmK] := aHarmCorr[iHarmK] + rHarmLR * (rATgt - rAAct);
-                    bHarmCorr[iHarmK] := bHarmCorr[iHarmK] + rHarmLR * (rBTgt - rBAct);
+                    rErrRe := (aTgtSum[iHarmK] - aActSum[iHarmK]) * rHarmNorm;
+                    rErrIm := (bTgtSum[iHarmK] - bActSum[iHarmK]) * rHarmNorm;
+
+                    // 旋转误差 -k·θ₁，等价于乘 exp(-j·k·θ₁) = cos(k·θ₁) - j·sin(k·θ₁)
+                    rKTheta := INT_TO_REAL(iHarmK) * rPlantPhase1;
+                    rCosKT  := COS(rKTheta);
+                    rSinKT  := SIN(rKTheta);
+                    rErrReComp := rErrRe * rCosKT + rErrIm * rSinKT;
+                    rErrImComp := rErrIm * rCosKT - rErrRe * rSinKT;
+
+                    aHarmCorr[iHarmK] := aHarmCorr[iHarmK] + rHarmLR * rErrReComp;
+                    bHarmCorr[iHarmK] := bHarmCorr[iHarmK] + rHarmLR * rErrImComp;
+
                     IF aHarmCorr[iHarmK] >  rHarmLimit THEN aHarmCorr[iHarmK] :=  rHarmLimit; END_IF
                     IF aHarmCorr[iHarmK] < -rHarmLimit THEN aHarmCorr[iHarmK] := -rHarmLimit; END_IF
                     IF bHarmCorr[iHarmK] >  rHarmLimit THEN bHarmCorr[iHarmK] :=  rHarmLimit; END_IF
@@ -348,7 +383,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     END_IF
 
     // 重置谐波内积累加器（每周期开始重新积分）
-    FOR iHarmK := 2 TO 5 DO
+    FOR iHarmK := 1 TO 5 DO
         aTgtSum[iHarmK] := 0.0;
         bTgtSum[iHarmK] := 0.0;
         aActSum[iHarmK] := 0.0;
@@ -382,10 +417,10 @@ IF rActual > rActualMax THEN rActualMax := rActual; END_IF
 IF rActual < rActualMin THEN rActualMin := rActual; END_IF
 
 // ---- 谐波内积累加（仅当 bHarmEnable 开启时执行，省 CPU）----
-// 每周期累加 ∫ signal · cos(2π·k·φ) dφ 与 ∫ signal · sin(2π·k·φ) dφ
+// 累加范围 1~5：1 阶用于估被控对象相位 θ₁；2~5 阶才真正参与修正
 // 周期边界处归一为本周期的傅里叶系数 a_k, b_k
 IF bHarmEnable THEN
-    FOR iHarmK := 2 TO 5 DO
+    FOR iHarmK := 1 TO 5 DO
         rHarmAngle := TWO_PI * INT_TO_REAL(iHarmK) * rPhi;
         rHarmCos   := COS(rHarmAngle);
         rHarmSin   := SIN(rHarmAngle);
