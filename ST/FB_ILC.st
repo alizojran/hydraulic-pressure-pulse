@@ -271,18 +271,25 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             IF nScaleCycleCount >= CYCLES_PER_UPDATE THEN
                 rAmpFbPos := rAmpFbPosSum / INT_TO_REAL(nScaleCycleCount);
                 rAmpFbNeg := rAmpFbNegSum / INT_TO_REAL(nScaleCycleCount);
-                // 上半：饱和优先（反馈在峰停留显著超过指令 → 缩小 rScalePos），否则按幅值比学习
+                // 上半：饱和判定细分指令是否已过冲（rScalePos > 1）
+                //   - 饱和 + 过冲：指令超过目标导致削顶 → 缩小 rScalePos
+                //   - 饱和 + 未过冲：系统物理触顶 → 保持不变（再缩小只让反馈更够不到目标）
+                //   - 无饱和：按幅值比律学习
                 IF rAmpFbPos > 0.001 THEN
                     IF rTopSatRatio > SAT_TOL THEN
-                        rScalePos := rScalePos * (1.0 - rLearningRate * rTopSatRatio);
+                        IF rScalePos > 1.0 THEN
+                            rScalePos := rScalePos * (1.0 - rLearningRate * rTopSatRatio);
+                        END_IF
                     ELSE
                         rScalePos := rScalePos * (1.0 + rLearningRate * (rHalfRange / rAmpFbPos - 1.0));
                     END_IF
                 END_IF
-                // 下半：饱和优先（反馈在谷停留显著超过指令 → 缩小 rScaleNeg），否则按幅值比学习
+                // 下半：同理（rScaleNeg > 1 表示指令已贴到目标底之下）
                 IF rAmpFbNeg > 0.001 THEN
                     IF rBotSatRatio > SAT_TOL THEN
-                        rScaleNeg := rScaleNeg * (1.0 - rLearningRate * rBotSatRatio);
+                        IF rScaleNeg > 1.0 THEN
+                            rScaleNeg := rScaleNeg * (1.0 - rLearningRate * rBotSatRatio);
+                        END_IF
                     ELSE
                         rScaleNeg := rScaleNeg * (1.0 + rLearningRate * (rHalfRange / rAmpFbNeg - 1.0));
                     END_IF
