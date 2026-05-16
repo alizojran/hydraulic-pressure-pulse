@@ -31,6 +31,8 @@ VAR_OUTPUT
 	nWaveType      : INT  := 0;      // 检测到的波形类型：0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波
 	rFlatFrac      : REAL;           // 指令峰谷附近时间占比（波形类型判断依据，诊断）
 	rSymFrac       : REAL;           // 指令在均值以上时间占比（对称性，诊断：0.5=对称，偏离大→任意波）
+	rTopSatRatio   : REAL;           // 顶部饱和比 = 反馈近顶停留比 - 指令近顶停留比（>SAT_TOL 视为饱和）
+	rBotSatRatio   : REAL;           // 谷部饱和比 = 反馈近谷停留比 - 指令近谷停留比（>SAT_TOL 视为饱和）
 END_VAR
 VAR
 	rMidpoint        : REAL;
@@ -74,6 +76,10 @@ VAR
 	iTargetAboveMidCount: INT;       // 暖机期：指令在均值以上的采样点数（用于对称性检测）
 	iTotalDetectCount   : INT;       // 暖机期：有效检测采样总数
 	bWaveDetected       : BOOL;      // 波形类型已检测完成
+	iTargetNearTop      : INT;       // 当前周期：目标在自身上半 10% 内的采样数
+	iTargetNearBot      : INT;       // 当前周期：目标在自身下半 10% 内的采样数
+	iActualNearTop      : INT;       // 当前周期：反馈在自身上半 10% 内的采样数
+	iActualNearBot      : INT;       // 当前周期：反馈在自身下半 10% 内的采样数
 END_VAR
 VAR CONSTANT
 	SCALE_MIN         : REAL := 0.2;
@@ -88,6 +94,7 @@ VAR CONSTANT
 	FLAT_THR_SIN      : REAL := 0.40;  // 15~40%  → 正弦波
 	FLAT_THR_TRAP     : REAL := 0.70;  // 40~70%  → 梯形波
                                        // > 70%   → 矩形波
+	SAT_TOL           : REAL := 0.05;  // 饱和容差：反馈近峰停留比超出指令多少视为饱和（触发 rScale 回退）
 END_VAR
 
 
@@ -126,6 +133,8 @@ IF bReset OR NOT bEnable THEN
         iTargetAboveMidCount   := 0;
         iTotalDetectCount      := 0;
         bWaveDetected          := FALSE;
+        rTopSatRatio           := 0.0;
+        rBotSatRatio           := 0.0;
     END_IF
     rOutput        := 0.0;
     rVirtualTarget := 0.0;
@@ -139,6 +148,10 @@ IF bReset OR NOT bEnable THEN
     iQ2Count       := 0;
     iQ3Count       := 0;
     iQ4Count       := 0;
+    iTargetNearTop := 0;
+    iTargetNearBot := 0;
+    iActualNearTop := 0;
+    iActualNearBot := 0;
     bNewCyclePrev  := FALSE;
     IF NOT bEnable THEN
         RETURN;
@@ -180,6 +193,14 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     rMidpoint  := (rTargetMax + rTargetMin) / 2.0;
     rHalfRange := (rTargetMax - rTargetMin) / 2.0;
     IF rHalfRange < 0.001 THEN rHalfRange := 0.001; END_IF
+
+    // ---- 饱和检测：本周期反馈/指令近峰停留比之差，正值表示反馈被削顶/削底 ----
+    IF iPointsPerCycle > 0 THEN
+        rTopSatRatio := INT_TO_REAL(iActualNearTop - iTargetNearTop) / INT_TO_REAL(iPointsPerCycle);
+        rBotSatRatio := INT_TO_REAL(iActualNearBot - iTargetNearBot) / INT_TO_REAL(iPointsPerCycle);
+    END_IF
+    iTargetNearTop := 0; iTargetNearBot := 0;
+    iActualNearTop := 0; iActualNearBot := 0;
 
     rPrevTargetMax   := rTargetMax;
     rPrevTargetMin   := rTargetMin;
@@ -250,11 +271,21 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             IF nScaleCycleCount >= CYCLES_PER_UPDATE THEN
                 rAmpFbPos := rAmpFbPosSum / INT_TO_REAL(nScaleCycleCount);
                 rAmpFbNeg := rAmpFbNegSum / INT_TO_REAL(nScaleCycleCount);
+                // 上半：饱和优先（反馈在峰停留显著超过指令 → 缩小 rScalePos），否则按幅值比学习
                 IF rAmpFbPos > 0.001 THEN
-                    rScalePos := rScalePos * (1.0 + rLearningRate * (rHalfRange / rAmpFbPos - 1.0));
+                    IF rTopSatRatio > SAT_TOL THEN
+                        rScalePos := rScalePos * (1.0 - rLearningRate * rTopSatRatio);
+                    ELSE
+                        rScalePos := rScalePos * (1.0 + rLearningRate * (rHalfRange / rAmpFbPos - 1.0));
+                    END_IF
                 END_IF
+                // 下半：饱和优先（反馈在谷停留显著超过指令 → 缩小 rScaleNeg），否则按幅值比学习
                 IF rAmpFbNeg > 0.001 THEN
-                    rScaleNeg := rScaleNeg * (1.0 + rLearningRate * (rHalfRange / rAmpFbNeg - 1.0));
+                    IF rBotSatRatio > SAT_TOL THEN
+                        rScaleNeg := rScaleNeg * (1.0 - rLearningRate * rBotSatRatio);
+                    ELSE
+                        rScaleNeg := rScaleNeg * (1.0 + rLearningRate * (rHalfRange / rAmpFbNeg - 1.0));
+                    END_IF
                 END_IF
                 IF rScalePos < SCALE_MIN THEN rScalePos := SCALE_MIN; END_IF
                 IF rScalePos > SCALE_MAX THEN rScalePos := SCALE_MAX; END_IF
@@ -291,6 +322,23 @@ IF NOT bWaveDetected AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
     IF rTargetRaw >= rMidpoint THEN
         iTargetAboveMidCount := iTargetAboveMidCount + 1;
     END_IF
+END_IF
+
+// ---- 饱和检测计数：目标用 rHalfRange、反馈用 rAmpFbPos/Neg 作为各自基准 ----
+// 占比对比是波形无关的：任意波形稳态时两者应相等，反馈停留时间显著更长即饱和
+IF iIterCount >= 1 AND rHalfRange > 0.001 THEN
+    IF (rTargetRaw - rMidpoint) > 0.9 * rHalfRange THEN
+        iTargetNearTop := iTargetNearTop + 1;
+    END_IF
+    IF (rMidpoint - rTargetRaw) > 0.9 * rHalfRange THEN
+        iTargetNearBot := iTargetNearBot + 1;
+    END_IF
+END_IF
+IF rAmpFbPos > 0.001 AND (rActual - rMidpoint) > 0.9 * rAmpFbPos THEN
+    iActualNearTop := iActualNearTop + 1;
+END_IF
+IF rAmpFbNeg > 0.001 AND (rMidpoint - rActual) > 0.9 * rAmpFbNeg THEN
+    iActualNearBot := iActualNearBot + 1;
 END_IF
 
 // 4象限反馈采样
