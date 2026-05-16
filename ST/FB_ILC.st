@@ -8,7 +8,7 @@ VAR_INPUT
 	bNewCycle       : BOOL;
 	bReset          : BOOL;
 	iMaxIterations  : INT;
-	rLearningRate   : REAL := 0.3;   // 幅值 scale 学习率
+	rLearningRate   : REAL := 0.3;   // 端点学习率 (rVMax/rVMin 的步长系数)
 	rAlphaLR        : REAL := 0.4;   // α 学习率（仅正弦/三角波有效）
 	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（FALSE = 4象限参数锁定不更新）
 	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正，同时完成波形类型检测
@@ -19,10 +19,12 @@ VAR_OUTPUT
 	iIteration     : INT;
 	rRmsError      : REAL;
 	bConverged     : BOOL;
-	rPeakError     : REAL;
-	rValleyError   : REAL;
-	rScalePos      : REAL := 1.0;    // 上半幅值放大系数
-	rScaleNeg      : REAL := 1.0;    // 下半幅值放大系数
+	rPeakError     : REAL;           // = rTargetMax - rActualMax（反馈峰不够高 → 正）
+	rValleyError   : REAL;           // = rTargetMin - rActualMin（反馈谷不够低 → 负）
+	rVMax          : REAL;           // 虚拟峰：仿射映射的目标上端点
+	rVMin          : REAL;           // 虚拟谷：仿射映射的目标下端点
+	rScalePos      : REAL := 1.0;    // 诊断派生量：(rVMax - rMidpoint) / rHalfRange
+	rScaleNeg      : REAL := 1.0;    // 诊断派生量：(rMidpoint - rVMin) / rHalfRange
 	rAlpha1Cmd     : REAL := 0.25;   // Q1 指令时长占比：上升 + 低于均值
 	rAlpha2Cmd     : REAL := 0.25;   // Q2 指令时长占比：上升 + 高于均值
 	rAlpha3Cmd     : REAL := 0.25;   // Q3 指令时长占比：下降 + 高于均值
@@ -31,8 +33,6 @@ VAR_OUTPUT
 	nWaveType      : INT  := 0;      // 检测到的波形类型：0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波
 	rFlatFrac      : REAL;           // 指令峰谷附近时间占比（波形类型判断依据，诊断）
 	rSymFrac       : REAL;           // 指令在均值以上时间占比（对称性，诊断：0.5=对称，偏离大→任意波）
-	rTopSatRatio   : REAL;           // 顶部饱和比 = 反馈近顶停留比 - 指令近顶停留比（>SAT_TOL 视为饱和）
-	rBotSatRatio   : REAL;           // 谷部饱和比 = 反馈近谷停留比 - 指令近谷停留比（>SAT_TOL 视为饱和）
 END_VAR
 VAR
 	rMidpoint        : REAL;
@@ -46,11 +46,10 @@ VAR
 	rPrevTargetRange : REAL;
 	bNewCyclePrev    : BOOL;
 	iIterCount       : INT;
-	nScaleCycleCount : INT;
-	rAmpFbPosSum     : REAL;
-	rAmpFbNegSum     : REAL;
-	rAmpFbPos        : REAL;
-	rAmpFbNeg        : REAL;
+	bVInitialized    : BOOL;         // rVMax/rVMin 是否已用首个有效周期端点初始化
+	nUpdateCount     : INT;          // 当前学习窗口已累计周期数
+	rPeakErrSum      : REAL;         // 当前窗口峰误差累计
+	rValleyErrSum    : REAL;         // 当前窗口谷误差累计
 	rErrorSum2       : REAL;
 	iErrorCount      : INT;
 	iQ1Count         : INT;
@@ -71,19 +70,15 @@ VAR
 	rPhi             : REAL;
 	rPhiStd          : REAL;
 	rWarpedY         : REAL;
-	rWarpedTarget    : REAL;
-	iNearExtCount       : INT;       // 暖机期：指令接近峰谷的采样点数（用于波形类型检测）
-	iTargetAboveMidCount: INT;       // 暖机期：指令在均值以上的采样点数（用于对称性检测）
+	rSourceTarget    : REAL;         // 仿射映射前的源波形：1/2 用 α 重建，其余直通 rTargetRaw
+	rNorm            : REAL;
+	rLimit           : REAL;
+	iNearExtCount       : INT;       // 暖机期：指令接近峰谷的采样点数（波形类型检测）
+	iTargetAboveMidCount: INT;       // 暖机期：指令在均值以上的采样点数（对称性检测）
 	iTotalDetectCount   : INT;       // 暖机期：有效检测采样总数
 	bWaveDetected       : BOOL;      // 波形类型已检测完成
-	iTargetNearTop      : INT;       // 当前周期：目标在自身上半 10% 内的采样数
-	iTargetNearBot      : INT;       // 当前周期：目标在自身下半 10% 内的采样数
-	iActualNearTop      : INT;       // 当前周期：反馈在自身上半 10% 内的采样数
-	iActualNearBot      : INT;       // 当前周期：反馈在自身下半 10% 内的采样数
 END_VAR
 VAR CONSTANT
-	SCALE_MIN         : REAL := 0.2;
-	SCALE_MAX         : REAL := 5.0;
 	ALPHA_Q_MIN       : REAL := 0.05;
 	ALPHA_Q_MAX       : REAL := 0.70;
 	TWO_PI            : REAL := 6.283185307;
@@ -93,8 +88,10 @@ VAR CONSTANT
 	FLAT_THR_TRI      : REAL := 0.15;  // < 15%   → 三角波
 	FLAT_THR_SIN      : REAL := 0.40;  // 15~40%  → 正弦波
 	FLAT_THR_TRAP     : REAL := 0.70;  // 40~70%  → 梯形波
-                                       // > 70%   → 矩形波
-	SAT_TOL           : REAL := 0.05;  // 饱和容差：反馈近峰停留比超出指令多少视为饱和（触发 rScale 回退）
+	                                   // > 70%   → 矩形波
+	// 端点限幅：rVMax / rVMin 距各自目标端点不超过 K * rPrevTargetRange
+	// 等价于把幅值/偏置整体放大不超过 (1 + 2K) 倍，防积分饱和
+	V_RANGE_LIMIT_K   : REAL := 2.0;
 END_VAR
 
 
@@ -104,9 +101,9 @@ END_VAR
 IF bReset OR NOT bEnable THEN
     IF bReset THEN
         iIterCount        := 0;
-        nScaleCycleCount  := 0;
-        rAmpFbPosSum      := 0.0;
-        rAmpFbNegSum      := 0.0;
+        nUpdateCount      := 0;
+        rPeakErrSum       := 0.0;
+        rValleyErrSum     := 0.0;
         rRmsError         := 0.0;
         bConverged        := FALSE;
         rMidpoint         := 0.0;
@@ -119,8 +116,11 @@ IF bReset OR NOT bEnable THEN
         rAlpha3Cmd        := 0.25;
         rAlpha4Cmd        := 0.25;
         rAlphaFb          := 0.5;
+        rVMax             := 0.0;
+        rVMin             := 0.0;
         rScalePos         := 1.0;
         rScaleNeg         := 1.0;
+        bVInitialized     := FALSE;
         iQ1Count          := 0;
         iQ2Count          := 0;
         iQ3Count          := 0;
@@ -133,8 +133,6 @@ IF bReset OR NOT bEnable THEN
         iTargetAboveMidCount   := 0;
         iTotalDetectCount      := 0;
         bWaveDetected          := FALSE;
-        rTopSatRatio           := 0.0;
-        rBotSatRatio           := 0.0;
     END_IF
     rOutput        := 0.0;
     rVirtualTarget := 0.0;
@@ -148,10 +146,6 @@ IF bReset OR NOT bEnable THEN
     iQ2Count       := 0;
     iQ3Count       := 0;
     iQ4Count       := 0;
-    iTargetNearTop := 0;
-    iTargetNearBot := 0;
-    iActualNearTop := 0;
-    iActualNearBot := 0;
     bNewCyclePrev  := FALSE;
     IF NOT bEnable THEN
         RETURN;
@@ -174,7 +168,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     rErrorSum2  := 0.0;
     iErrorCount := 0;
 
-    // 4象限 α_fb 计算
+    // 4 象限 α_fb 计算
     rAlphaSum := INT_TO_REAL(iQ1Count + iQ2Count + iQ3Count + iQ4Count);
     IF rAlphaSum > 0.0 THEN
         rAlpha1Fb := INT_TO_REAL(iQ1Count) / rAlphaSum;
@@ -185,22 +179,14 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     END_IF
     iQ1Count := 0; iQ2Count := 0; iQ3Count := 0; iQ4Count := 0;
 
+    // 端点误差：cmd 与 fb 各自一周期的峰、谷直接对比
     rPeakError   := rTargetMax - rActualMax;
     rValleyError := rTargetMin - rActualMin;
-    rAmpFbPos    := rActualMax - rMidpoint;
-    rAmpFbNeg    := rMidpoint  - rActualMin;
 
+    // rMidpoint / rHalfRange 仍由 cmd 计算，供波形检测、α 学习、4 象限分类、诊断输出使用
     rMidpoint  := (rTargetMax + rTargetMin) / 2.0;
     rHalfRange := (rTargetMax - rTargetMin) / 2.0;
     IF rHalfRange < 0.001 THEN rHalfRange := 0.001; END_IF
-
-    // ---- 饱和检测：本周期反馈/指令近峰停留比之差，正值表示反馈被削顶/削底 ----
-    IF iPointsPerCycle > 0 THEN
-        rTopSatRatio := INT_TO_REAL(iActualNearTop - iTargetNearTop) / INT_TO_REAL(iPointsPerCycle);
-        rBotSatRatio := INT_TO_REAL(iActualNearBot - iTargetNearBot) / INT_TO_REAL(iPointsPerCycle);
-    END_IF
-    iTargetNearTop := 0; iTargetNearBot := 0;
-    iActualNearTop := 0; iActualNearBot := 0;
 
     rPrevTargetMax   := rTargetMax;
     rPrevTargetMin   := rTargetMin;
@@ -218,9 +204,8 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             rFlatFrac := INT_TO_REAL(iNearExtCount)        / INT_TO_REAL(iTotalDetectCount);
             rSymFrac  := INT_TO_REAL(iTargetAboveMidCount) / INT_TO_REAL(iTotalDetectCount);
 
-            // 对称性检查优先：均值以上时间占比严重偏离0.5 → 任意波（如锯齿波）
             IF rSymFrac < 0.35 OR rSymFrac > 0.65 THEN
-                nWaveType := 5;      // 任意波：波形不对称，无法用标准基底重建
+                nWaveType := 5;      // 任意波：波形不对称
             ELSIF rFlatFrac > FLAT_THR_TRAP THEN
                 nWaveType := 4;      // 矩形波：峰谷附近>70%
             ELSIF rFlatFrac > FLAT_THR_SIN THEN
@@ -232,16 +217,23 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             END_IF
             bWaveDetected := TRUE;
         END_IF
-        // 暖机期清空幅值累积数据
-        rAmpFbPosSum     := 0.0;
-        rAmpFbNegSum     := 0.0;
-        nScaleCycleCount := 0;
+        // 暖机期清空学习窗口
+        nUpdateCount   := 0;
+        rPeakErrSum    := 0.0;
+        rValleyErrSum  := 0.0;
 
     ELSIF NOT bConverged THEN
+        // 出暖机首次：用首个有效周期的目标端点初始化 rVMax / rVMin（等效透传）
+        IF NOT bVInitialized THEN
+            rVMax := rPrevTargetMax;
+            rVMin := rPrevTargetMin;
+            bVInitialized := TRUE;
+        END_IF
+
         IF iMaxIterations > 0 AND iIterCount >= iMaxIterations THEN
             bConverged := TRUE;
         ELSE
-            // ---- α 4象限自学习（仅正弦/三角波，nWaveType=1或2）----
+            // ---- α 4 象限自学习（仅正弦/三角，nWaveType=1或2）----
             IF bAlphaEnable AND (nWaveType = 1 OR nWaveType = 2) THEN
                 rAlpha1Cmd := rAlpha1Cmd + rAlphaLR * (0.25 - rAlpha1Fb);
                 rAlpha2Cmd := rAlpha2Cmd + rAlphaLR * (0.25 - rAlpha2Fb);
@@ -264,42 +256,42 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // ---- 幅值自学习（所有波形类型均有效）----
-            rAmpFbPosSum     := rAmpFbPosSum + rAmpFbPos;
-            rAmpFbNegSum     := rAmpFbNegSum + rAmpFbNeg;
-            nScaleCycleCount := nScaleCycleCount + 1;
-            IF nScaleCycleCount >= CYCLES_PER_UPDATE THEN
-                rAmpFbPos := rAmpFbPosSum / INT_TO_REAL(nScaleCycleCount);
-                rAmpFbNeg := rAmpFbNegSum / INT_TO_REAL(nScaleCycleCount);
-                // 上半：饱和缩小仅在反馈已达目标深度且已过冲(rScale>1)时生效
-                //   - 反馈幅值 < 目标幅值：欠驱动，不论饱和判定如何都按幅值比律学习
-                //   - 反馈幅值 ≥ 目标幅值 且 rScalePos>1 且 近峰停留过长：真实过冲削顶 → 缩小
-                //   注：rAmpFbPos 作为反馈近峰基准本身是波形相关的，反馈圆顿时会假阳性，
-                //   故仅当反馈幅值确实达到目标幅值时才采信饱和判定
-                IF rAmpFbPos > 0.001 THEN
-                    IF rTopSatRatio > SAT_TOL AND rAmpFbPos >= rHalfRange AND rScalePos > 1.0 THEN
-                        rScalePos := rScalePos * (1.0 - rLearningRate * rTopSatRatio);
-                    ELSE
-                        rScalePos := rScalePos * (1.0 + rLearningRate * (rHalfRange / rAmpFbPos - 1.0));
-                    END_IF
+            // ---- 端点幅值自学习（加法型，所有波形通用）----
+            //   rVMax += LR * (rTargetMax - rActualMax)   // 反馈峰不够高 → 抬虚拟峰
+            //   rVMin += LR * (rTargetMin - rActualMin)   // 反馈谷不够低 → 压虚拟谷
+            //   优点：上下端点独立学，自然解耦幅值与 DC 偏置；不依赖反馈相对 cmd 中点的位置
+            rPeakErrSum   := rPeakErrSum   + rPeakError;
+            rValleyErrSum := rValleyErrSum + rValleyError;
+            nUpdateCount  := nUpdateCount  + 1;
+            IF nUpdateCount >= CYCLES_PER_UPDATE THEN
+                rVMax := rVMax + rLearningRate * (rPeakErrSum   / INT_TO_REAL(nUpdateCount));
+                rVMin := rVMin + rLearningRate * (rValleyErrSum / INT_TO_REAL(nUpdateCount));
+
+                // 端点限幅：|rVMax-rTargetMax|, |rVMin-rTargetMin| ≤ K*range
+                // 作用：物理饱和时防积分饱和，等价于老 SCALE_MAX
+                IF rPrevTargetRange > 0.001 THEN
+                    rLimit := V_RANGE_LIMIT_K * rPrevTargetRange;
+                    IF rVMax > rPrevTargetMax + rLimit THEN rVMax := rPrevTargetMax + rLimit; END_IF
+                    IF rVMax < rPrevTargetMax - rLimit THEN rVMax := rPrevTargetMax - rLimit; END_IF
+                    IF rVMin > rPrevTargetMin + rLimit THEN rVMin := rPrevTargetMin + rLimit; END_IF
+                    IF rVMin < rPrevTargetMin - rLimit THEN rVMin := rPrevTargetMin - rLimit; END_IF
                 END_IF
-                // 下半：同上策略（修复底部够不到最低点）
-                IF rAmpFbNeg > 0.001 THEN
-                    IF rBotSatRatio > SAT_TOL AND rAmpFbNeg >= rHalfRange AND rScaleNeg > 1.0 THEN
-                        rScaleNeg := rScaleNeg * (1.0 - rLearningRate * rBotSatRatio);
-                    ELSE
-                        rScaleNeg := rScaleNeg * (1.0 + rLearningRate * (rHalfRange / rAmpFbNeg - 1.0));
-                    END_IF
+                // 防 vMax/vMin 倒挂（极端误差下可能发生）
+                IF rVMax <= rVMin + 0.001 THEN
+                    rVMax := rVMin + 0.001;
                 END_IF
-                IF rScalePos < SCALE_MIN THEN rScalePos := SCALE_MIN; END_IF
-                IF rScalePos > SCALE_MAX THEN rScalePos := SCALE_MAX; END_IF
-                IF rScaleNeg < SCALE_MIN THEN rScaleNeg := SCALE_MIN; END_IF
-                IF rScaleNeg > SCALE_MAX THEN rScaleNeg := SCALE_MAX; END_IF
-                rAmpFbPosSum     := 0.0;
-                rAmpFbNegSum     := 0.0;
-                nScaleCycleCount := 0;
+
+                rPeakErrSum   := 0.0;
+                rValleyErrSum := 0.0;
+                nUpdateCount  := 0;
             END_IF
         END_IF
+    END_IF
+
+    // 诊断派生量：保留 rScalePos / rScaleNeg 给上位机看
+    IF rHalfRange > 0.001 AND bVInitialized THEN
+        rScalePos := (rVMax - rMidpoint) / rHalfRange;
+        rScaleNeg := (rMidpoint - rVMin) / rHalfRange;
     END_IF
 
 END_IF
@@ -316,8 +308,8 @@ IF rActual < rActualMin THEN rActualMin := rActual; END_IF
 rErrorSum2  := rErrorSum2 + (rTargetRaw - rActual) * (rTargetRaw - rActual);
 iErrorCount := iErrorCount + 1;
 
-// ---- 波形类型检测：统计指令在峰谷附近(|target-mid| > 90%×halfRange)的时间占比 ----
-// 从 iIterCount>=1 开始（此时 rMidpoint/rHalfRange 已由第一个周期数据初始化）
+// ---- 波形类型检测：统计指令在峰谷附近(|target-mid| > 90%*halfRange)的时间占比 ----
+// 从 iIterCount>=1 开始（rMidpoint/rHalfRange 已由第一个周期数据初始化）
 IF NOT bWaveDetected AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
     iTotalDetectCount := iTotalDetectCount + 1;
     IF ABS(rTargetRaw - rMidpoint) > 0.9 * rHalfRange THEN
@@ -328,24 +320,7 @@ IF NOT bWaveDetected AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
     END_IF
 END_IF
 
-// ---- 饱和检测计数：目标用 rHalfRange、反馈用 rAmpFbPos/Neg 作为各自基准 ----
-// 占比对比是波形无关的：任意波形稳态时两者应相等，反馈停留时间显著更长即饱和
-IF iIterCount >= 1 AND rHalfRange > 0.001 THEN
-    IF (rTargetRaw - rMidpoint) > 0.9 * rHalfRange THEN
-        iTargetNearTop := iTargetNearTop + 1;
-    END_IF
-    IF (rMidpoint - rTargetRaw) > 0.9 * rHalfRange THEN
-        iTargetNearBot := iTargetNearBot + 1;
-    END_IF
-END_IF
-IF rAmpFbPos > 0.001 AND (rActual - rMidpoint) > 0.9 * rAmpFbPos THEN
-    iActualNearTop := iActualNearTop + 1;
-END_IF
-IF rAmpFbNeg > 0.001 AND (rMidpoint - rActual) > 0.9 * rAmpFbNeg THEN
-    iActualNearBot := iActualNearBot + 1;
-END_IF
-
-// 4象限反馈采样
+// 4 象限反馈采样（仅供 α 学习与诊断；不参与端点学习）
 IF rActual >= rActualPrev THEN
     bFbRising := TRUE;
 ELSE
@@ -371,93 +346,78 @@ END_IF
 // 输出生成
 // ============================================================
 
-// 暖机期直接透传
-IF iIterCount <= nWarmupCycles THEN
+// 暖机期 / 首次学习窗未到 / 目标无幅值：直通
+IF iIterCount <= nWarmupCycles OR NOT bVInitialized OR rPrevTargetRange < 0.001 THEN
     rVirtualTarget := rTargetRaw;
     rOutput        := 0.0;
     bNewCyclePrev  := bNewCycle;
     RETURN;
 END_IF
 
-// 梯形波 / 矩形波 / 任意波（nWaveType=3,4,5）：跳过相位畸变，直接对 rTargetRaw 幅值缩放
-IF nWaveType = 3 OR nWaveType = 4 OR nWaveType = 5 THEN
-    IF rTargetRaw >= rMidpoint THEN
-        rVirtualTarget := rMidpoint + (rTargetRaw - rMidpoint) * rScalePos;
+// ---- 源波形 rSourceTarget ----
+//   正弦(1)/三角(2)：用 α 4 段重建标准基底，得到去噪后的 rSourceTarget
+//   梯形(3)/矩形(4)/任意波(5)：直接用 rTargetRaw 作源（不假设波形形状）
+IF nWaveType = 1 OR nWaveType = 2 THEN
+    IF iPointsPerCycle > 0 THEN
+        rPhi := INT_TO_REAL(iPointIndex) / INT_TO_REAL(iPointsPerCycle);
     ELSE
-        rVirtualTarget := rMidpoint - (rMidpoint - rTargetRaw) * rScaleNeg;
+        rPhi := 0.0;
     END_IF
-    rOutput       := rVirtualTarget - rTargetRaw;
-    bNewCyclePrev := bNewCycle;
-    RETURN;
-END_IF
+    IF rPhi < 0.0 THEN rPhi := 0.0; END_IF
+    IF rPhi > 1.0 THEN rPhi := 1.0; END_IF
 
-// 正弦波(1) / 三角波(2)：4段线性相位畸变 + 幅值缩放
-IF iPointsPerCycle > 0 THEN
-    rPhi := INT_TO_REAL(iPointIndex) / INT_TO_REAL(iPointsPerCycle);
+    rT1 := rAlpha1Cmd;
+    rT2 := rT1 + rAlpha2Cmd;
+    rT3 := rT2 + rAlpha3Cmd;
+
+    IF rPhi < rT1 THEN
+        IF rT1 > 0.001 THEN
+            rPhiStd := rPhi / rT1 * 0.25;
+        ELSE
+            rPhiStd := 0.0;
+        END_IF
+    ELSIF rPhi < rT2 THEN
+        rDelta := rT2 - rT1;
+        IF rDelta > 0.001 THEN
+            rPhiStd := 0.25 + (rPhi - rT1) / rDelta * 0.25;
+        ELSE
+            rPhiStd := 0.25;
+        END_IF
+    ELSIF rPhi < rT3 THEN
+        rDelta := rT3 - rT2;
+        IF rDelta > 0.001 THEN
+            rPhiStd := 0.50 + (rPhi - rT2) / rDelta * 0.25;
+        ELSE
+            rPhiStd := 0.50;
+        END_IF
+    ELSE
+        rDelta := 1.0 - rT3;
+        IF rDelta > 0.001 THEN
+            rPhiStd := 0.75 + (rPhi - rT3) / rDelta * 0.25;
+        ELSE
+            rPhiStd := 0.75;
+        END_IF
+    END_IF
+
+    IF nWaveType = 2 THEN
+        IF rPhiStd < 0.5 THEN
+            rWarpedY := 2.0 * rPhiStd;
+        ELSE
+            rWarpedY := 2.0 * (1.0 - rPhiStd);
+        END_IF
+    ELSE
+        rWarpedY := (1.0 - COS(TWO_PI * rPhiStd)) / 2.0;
+    END_IF
+
+    rSourceTarget := rPrevTargetMin + rWarpedY * rPrevTargetRange;
 ELSE
-    rPhi := 0.0;
-END_IF
-IF rPhi < 0.0 THEN rPhi := 0.0; END_IF
-IF rPhi > 1.0 THEN rPhi := 1.0; END_IF
-
-// 4段线性相位畸变
-rT1 := rAlpha1Cmd;
-rT2 := rT1 + rAlpha2Cmd;
-rT3 := rT2 + rAlpha3Cmd;
-
-IF rPhi < rT1 THEN
-    IF rT1 > 0.001 THEN
-        rPhiStd := rPhi / rT1 * 0.25;
-    ELSE
-        rPhiStd := 0.0;
-    END_IF
-ELSIF rPhi < rT2 THEN
-    rDelta := rT2 - rT1;
-    IF rDelta > 0.001 THEN
-        rPhiStd := 0.25 + (rPhi - rT1) / rDelta * 0.25;
-    ELSE
-        rPhiStd := 0.25;
-    END_IF
-ELSIF rPhi < rT3 THEN
-    rDelta := rT3 - rT2;
-    IF rDelta > 0.001 THEN
-        rPhiStd := 0.50 + (rPhi - rT2) / rDelta * 0.25;
-    ELSE
-        rPhiStd := 0.50;
-    END_IF
-ELSE
-    rDelta := 1.0 - rT3;
-    IF rDelta > 0.001 THEN
-        rPhiStd := 0.75 + (rPhi - rT3) / rDelta * 0.25;
-    ELSE
-        rPhiStd := 0.75;
-    END_IF
+    rSourceTarget := rTargetRaw;
 END_IF
 
-// 基底波形：正弦=余弦形，三角=线性斜坡
-IF nWaveType = 2 THEN
-    // 三角波基底
-    IF rPhiStd < 0.5 THEN
-        rWarpedY := 2.0 * rPhiStd;
-    ELSE
-        rWarpedY := 2.0 * (1.0 - rPhiStd);
-    END_IF
-ELSE
-    // 正弦波基底（默认）
-    rWarpedY := (1.0 - COS(TWO_PI * rPhiStd)) / 2.0;
-END_IF
-
-IF rPrevTargetRange > 0.001 THEN
-    rWarpedTarget := rPrevTargetMin + rWarpedY * rPrevTargetRange;
-ELSE
-    rWarpedTarget := rTargetRaw;
-END_IF
-
-IF rWarpedTarget >= rMidpoint THEN
-    rVirtualTarget := rMidpoint + (rWarpedTarget - rMidpoint) * rScalePos;
-ELSE
-    rVirtualTarget := rMidpoint - (rMidpoint - rWarpedTarget) * rScaleNeg;
-END_IF
+// ---- 统一仿射重映射 [rPrevTargetMin, rPrevTargetMax] → [rVMin, rVMax] ----
+// 形状严格保留，端点替换为学到的虚拟峰/谷
+rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
+rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
 
 rOutput := rVirtualTarget - rTargetRaw;
 
