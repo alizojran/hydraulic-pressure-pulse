@@ -34,11 +34,6 @@ VAR_OUTPUT
 	rAlpha12Cmd    : ARRAY [1..12] OF REAL;
 	rAlpha12Tgt    : ARRAY [1..12] OF REAL;
 	rAlpha12Fb     : ARRAY [1..12] OF REAL;
-	// 梯形 / 矩形：平台分 2 段的幅值修正（MPa，叠加在 vMax/vMin 上）
-	rPlatBotA      : REAL;       // 底部平台前半段修正
-	rPlatBotB      : REAL;       // 底部平台后半段修正
-	rPlatTopA      : REAL;       // 顶部平台前半段修正
-	rPlatTopB      : REAL;       // 顶部平台后半段修正
 	// 波形检测
 	nWaveType      : INT  := 0;      // 0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波
 	rFlatFrac      : REAL;
@@ -71,23 +66,6 @@ VAR
 	iTgtBin12        : ARRAY [1..12] OF INT;
 	iFbBin12         : ARRAY [1..12] OF INT;
 	iBinTotal12      : INT;
-	// 平台分 2 段反馈累加（基于 cmd phase 切割）
-	rFbSumBotA       : REAL;
-	rFbSumBotB       : REAL;
-	rFbSumTopA       : REAL;
-	rFbSumTopB       : REAL;
-	iCntBotA         : INT;
-	iCntBotB         : INT;
-	iCntTopA         : INT;
-	iCntTopB         : INT;
-	// cmd 平台 phase 边界缓存（每周期更新）
-	rT1Cached        : REAL;
-	rT6Cached        : REAL;
-	rT7Cached        : REAL;
-	rBotMidPhase     : REAL;
-	rTopMidPhase     : REAL;
-	rFbAvg           : REAL;
-	rPlatCorrLimit   : REAL;
 	rTargetPrev      : REAL;
 	bTgtRising       : BOOL;
 	rActualPrev      : REAL;
@@ -132,8 +110,6 @@ VAR CONSTANT
 	ALPHA12_Q_MIN     : REAL := 0.02;
 	ALPHA12_Q_MAX     : REAL := 0.45;
 	PLATEAU_BAND_K    : REAL := 0.7;     // 平台判定带：|y - mid| > K * halfRange
-	PLAT_CORR_LR      : REAL := 0.3;     // 平台幅值修正学习率
-	PLAT_CORR_LIMIT_K : REAL := 0.3;     // 平台幅值修正上限：0.3 * halfRange
 	TWO_PI            : REAL := 6.283185307;
 	CYCLES_PER_UPDATE : INT  := 2;
 	FLAT_THR_TRI      : REAL := 0.15;
@@ -186,11 +162,6 @@ IF bReset OR NOT bEnable THEN
             rAlpha12Tgt[iBinK] := 0.08333;
             rAlpha12Fb[iBinK]  := 0.08333;
         END_FOR
-        // 平台幅值修正复位
-        rPlatBotA := 0.0;
-        rPlatBotB := 0.0;
-        rPlatTopA := 0.0;
-        rPlatTopB := 0.0;
     END_IF
     rOutput        := 0.0;
     rVirtualTarget := 0.0;
@@ -210,10 +181,6 @@ IF bReset OR NOT bEnable THEN
         iFbBin12[iBinK]  := 0;
     END_FOR
     iBinTotal12    := 0;
-    rFbSumBotA := 0.0; rFbSumBotB := 0.0;
-    rFbSumTopA := 0.0; rFbSumTopB := 0.0;
-    iCntBotA := 0; iCntBotB := 0;
-    iCntTopA := 0; iCntTopB := 0;
     bNewCyclePrev  := FALSE;
     IF NOT bEnable THEN
         RETURN;
@@ -356,35 +323,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // 平台分 2 段幅值修正学习（梯形 + 矩形）
-            IF nWaveType = 3 OR nWaveType = 4 THEN
-                IF iCntBotA > 0 THEN
-                    rFbAvg := rFbSumBotA / INT_TO_REAL(iCntBotA);
-                    rPlatBotA := rPlatBotA + PLAT_CORR_LR * (rPrevTargetMin - rFbAvg);
-                END_IF
-                IF iCntBotB > 0 THEN
-                    rFbAvg := rFbSumBotB / INT_TO_REAL(iCntBotB);
-                    rPlatBotB := rPlatBotB + PLAT_CORR_LR * (rPrevTargetMin - rFbAvg);
-                END_IF
-                IF iCntTopA > 0 THEN
-                    rFbAvg := rFbSumTopA / INT_TO_REAL(iCntTopA);
-                    rPlatTopA := rPlatTopA + PLAT_CORR_LR * (rPrevTargetMax - rFbAvg);
-                END_IF
-                IF iCntTopB > 0 THEN
-                    rFbAvg := rFbSumTopB / INT_TO_REAL(iCntTopB);
-                    rPlatTopB := rPlatTopB + PLAT_CORR_LR * (rPrevTargetMax - rFbAvg);
-                END_IF
-                rPlatCorrLimit := PLAT_CORR_LIMIT_K * rHalfRange;
-                IF rPlatBotA >  rPlatCorrLimit THEN rPlatBotA :=  rPlatCorrLimit; END_IF
-                IF rPlatBotA < -rPlatCorrLimit THEN rPlatBotA := -rPlatCorrLimit; END_IF
-                IF rPlatBotB >  rPlatCorrLimit THEN rPlatBotB :=  rPlatCorrLimit; END_IF
-                IF rPlatBotB < -rPlatCorrLimit THEN rPlatBotB := -rPlatCorrLimit; END_IF
-                IF rPlatTopA >  rPlatCorrLimit THEN rPlatTopA :=  rPlatCorrLimit; END_IF
-                IF rPlatTopA < -rPlatCorrLimit THEN rPlatTopA := -rPlatCorrLimit; END_IF
-                IF rPlatTopB >  rPlatCorrLimit THEN rPlatTopB :=  rPlatCorrLimit; END_IF
-                IF rPlatTopB < -rPlatCorrLimit THEN rPlatTopB := -rPlatCorrLimit; END_IF
-            END_IF
-
             // 端点幅值自学习（加法型，所有波形通用）
             rPeakErrSum   := rPeakErrSum   + rPeakError;
             rValleyErrSum := rValleyErrSum + rValleyError;
@@ -414,22 +352,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         rScalePos := (rVMax - rMidpoint) / rHalfRange;
         rScaleNeg := (rMidpoint - rVMin) / rHalfRange;
     END_IF
-
-    // 缓存梯形/矩形平台 phase 边界（per-sample 和 输出阶段共用）
-    IF nWaveType = 3 OR nWaveType = 4 THEN
-        rT1Cached    := rAlpha12Cmd[1];
-        rT6Cached    := rT1Cached + rAlpha12Cmd[2] + rAlpha12Cmd[3]
-                     + rAlpha12Cmd[4] + rAlpha12Cmd[5] + rAlpha12Cmd[6];
-        rT7Cached    := rT6Cached + rAlpha12Cmd[7];
-        rBotMidPhase := rT1Cached * 0.5;
-        rTopMidPhase := (rT6Cached + rT7Cached) * 0.5;
-    END_IF
-
-    // 复位平台分段反馈累加
-    rFbSumBotA := 0.0; rFbSumBotB := 0.0;
-    rFbSumTopA := 0.0; rFbSumTopB := 0.0;
-    iCntBotA := 0; iCntBotB := 0;
-    iCntTopA := 0; iCntTopB := 0;
 
 END_IF
 
@@ -562,27 +484,6 @@ IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 AND rHalfRange > 0.001 T
         END_IF
     END_IF
     iFbBin12[iBinK] := iFbBin12[iBinK] + 1;
-END_IF
-
-// --------- 平台分 2 段反馈累加（按 cmd phase 边界）---------
-IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 THEN
-    IF rPhi < rT1Cached THEN
-        IF rPhi < rBotMidPhase THEN
-            rFbSumBotA := rFbSumBotA + rActual;
-            iCntBotA   := iCntBotA + 1;
-        ELSE
-            rFbSumBotB := rFbSumBotB + rActual;
-            iCntBotB   := iCntBotB + 1;
-        END_IF
-    ELSIF rPhi >= rT6Cached AND rPhi < rT7Cached THEN
-        IF rPhi < rTopMidPhase THEN
-            rFbSumTopA := rFbSumTopA + rActual;
-            iCntTopA   := iCntTopA + 1;
-        ELSE
-            rFbSumTopB := rFbSumTopB + rActual;
-            iCntTopB   := iCntTopB + 1;
-        END_IF
-    END_IF
 END_IF
 
 // ============================================================
@@ -724,23 +625,6 @@ END_IF
 // 仿射重映射 [tMin, tMax] → [vMin, vMax]
 rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
-
-// 梯形 / 矩形平台幅值修正：按 cmd phase 把每个平台切 2 段，分别叠加 MPa 修正
-IF nWaveType = 3 OR nWaveType = 4 THEN
-    IF rPhi < rT1Cached THEN
-        IF rPhi < rBotMidPhase THEN
-            rVirtualTarget := rVirtualTarget + rPlatBotA;
-        ELSE
-            rVirtualTarget := rVirtualTarget + rPlatBotB;
-        END_IF
-    ELSIF rPhi >= rT6Cached AND rPhi < rT7Cached THEN
-        IF rPhi < rTopMidPhase THEN
-            rVirtualTarget := rVirtualTarget + rPlatTopA;
-        ELSE
-            rVirtualTarget := rVirtualTarget + rPlatTopB;
-        END_IF
-    END_IF
-END_IF
 
 rOutput := rVirtualTarget - rTargetRaw;
 
