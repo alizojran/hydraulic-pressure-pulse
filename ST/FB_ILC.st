@@ -88,8 +88,8 @@ VAR
 	bWaveDetected       : BOOL;
 END_VAR
 VAR CONSTANT
-	ALPHA_Q_MIN       : REAL := 0.05;
-	ALPHA_Q_MAX       : REAL := 0.25;
+	ALPHA_Q_MIN       : REAL := 0.04;
+	ALPHA_Q_MAX       : REAL := 0.35;
 	TWO_PI            : REAL := 6.283185307;
 	CYCLES_PER_UPDATE : INT  := 2;
 	FLAT_THR_TRI      : REAL := 0.15;
