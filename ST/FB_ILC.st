@@ -34,9 +34,6 @@ VAR_OUTPUT
 	rAlpha12Cmd    : ARRAY [1..12] OF REAL;
 	rAlpha12Tgt    : ARRAY [1..12] OF REAL;
 	rAlpha12Fb     : ARRAY [1..12] OF REAL;
-	// 梯形 / 矩形：平台线性 ramp 斜率（MPa，跨整个平台宽度的总变化量）
-	rPlatBotSlope  : REAL;       // 底部平台斜率：cmd 从 vMin-slope/2 线性升到 vMin+slope/2
-	rPlatTopSlope  : REAL;       // 顶部平台斜率：cmd 从 vMax-slope/2 线性升到 vMax+slope/2
 	// 波形检测
 	nWaveType      : INT  := 0;      // 0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波
 	rFlatFrac      : REAL;
@@ -69,26 +66,6 @@ VAR
 	iTgtBin12        : ARRAY [1..12] OF INT;
 	iFbBin12         : ARRAY [1..12] OF INT;
 	iBinTotal12      : INT;
-	// 平台 ramp 学习：前/后半段反馈累加
-	rFbSumBotFirst   : REAL;
-	rFbSumBotSecond  : REAL;
-	rFbSumTopFirst   : REAL;
-	rFbSumTopSecond  : REAL;
-	iCntBotFirst     : INT;
-	iCntBotSecond    : INT;
-	iCntTopFirst     : INT;
-	iCntTopSecond    : INT;
-	// cmd 平台 phase 边界缓存（每周期边界更新一次）
-	rT1Cached        : REAL;
-	rT6Cached        : REAL;
-	rT7Cached        : REAL;
-	rBotMidPhase     : REAL;
-	rTopMidPhase     : REAL;
-	rPlateauWidth    : REAL;
-	rLocalPhi        : REAL;
-	rAvgFirst        : REAL;
-	rAvgSecond       : REAL;
-	rPlatSlopeLimit  : REAL;
 	rTargetPrev      : REAL;
 	bTgtRising       : BOOL;
 	rActualPrev      : REAL;
@@ -133,10 +110,6 @@ VAR CONSTANT
 	ALPHA12_Q_MIN     : REAL := 0.02;
 	ALPHA12_Q_MAX     : REAL := 0.45;
 	PLATEAU_BAND_K    : REAL := 0.7;     // 平台判定带：|y - mid| > K * halfRange
-	PLAT_SLOPE_LR     : REAL := 0.3;     // 平台斜率学习率
-	PLAT_SLOPE_LIMIT_K: REAL := 0.3;     // 平台斜率上限：0.3 * halfRange
-	PLAT_TGT_MIN_FRAC : REAL := 0.03;    // 目标平台时间占比阈值：低于此值视为"没有平台"，跳过斜率学习
-	PLAT_SLOPE_DECAY  : REAL := 0.9;     // 跳过学习时的斜率衰减系数
 	TWO_PI            : REAL := 6.283185307;
 	CYCLES_PER_UPDATE : INT  := 2;
 	FLAT_THR_TRI      : REAL := 0.15;
@@ -189,8 +162,6 @@ IF bReset OR NOT bEnable THEN
             rAlpha12Tgt[iBinK] := 0.08333;
             rAlpha12Fb[iBinK]  := 0.08333;
         END_FOR
-        rPlatBotSlope := 0.0;
-        rPlatTopSlope := 0.0;
     END_IF
     rOutput        := 0.0;
     rVirtualTarget := 0.0;
@@ -210,10 +181,6 @@ IF bReset OR NOT bEnable THEN
         iFbBin12[iBinK]  := 0;
     END_FOR
     iBinTotal12    := 0;
-    rFbSumBotFirst := 0.0; rFbSumBotSecond := 0.0;
-    rFbSumTopFirst := 0.0; rFbSumTopSecond := 0.0;
-    iCntBotFirst := 0; iCntBotSecond := 0;
-    iCntTopFirst := 0; iCntTopSecond := 0;
     bNewCyclePrev  := FALSE;
     IF NOT bEnable THEN
         RETURN;
@@ -356,33 +323,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // 平台线性 ramp 斜率学习（梯形 + 矩形）
-            // 双门控：目标本身没有显著平台 → 跳过并衰减；样本不足 → 跳过
-            IF nWaveType = 3 OR nWaveType = 4 THEN
-                // 顶部平台
-                IF rAlpha12Tgt[7] >= PLAT_TGT_MIN_FRAC AND iCntTopFirst >= 2 AND iCntTopSecond >= 2 THEN
-                    rAvgFirst  := rFbSumTopFirst  / INT_TO_REAL(iCntTopFirst);
-                    rAvgSecond := rFbSumTopSecond / INT_TO_REAL(iCntTopSecond);
-                    rPlatTopSlope := rPlatTopSlope + PLAT_SLOPE_LR * (rAvgFirst - rAvgSecond);
-                ELSE
-                    rPlatTopSlope := rPlatTopSlope * PLAT_SLOPE_DECAY;
-                END_IF
-                // 底部平台
-                IF rAlpha12Tgt[1] >= PLAT_TGT_MIN_FRAC AND iCntBotFirst >= 2 AND iCntBotSecond >= 2 THEN
-                    rAvgFirst  := rFbSumBotFirst  / INT_TO_REAL(iCntBotFirst);
-                    rAvgSecond := rFbSumBotSecond / INT_TO_REAL(iCntBotSecond);
-                    rPlatBotSlope := rPlatBotSlope + PLAT_SLOPE_LR * (rAvgFirst - rAvgSecond);
-                ELSE
-                    rPlatBotSlope := rPlatBotSlope * PLAT_SLOPE_DECAY;
-                END_IF
-                // 限幅
-                rPlatSlopeLimit := PLAT_SLOPE_LIMIT_K * rHalfRange;
-                IF rPlatTopSlope >  rPlatSlopeLimit THEN rPlatTopSlope :=  rPlatSlopeLimit; END_IF
-                IF rPlatTopSlope < -rPlatSlopeLimit THEN rPlatTopSlope := -rPlatSlopeLimit; END_IF
-                IF rPlatBotSlope >  rPlatSlopeLimit THEN rPlatBotSlope :=  rPlatSlopeLimit; END_IF
-                IF rPlatBotSlope < -rPlatSlopeLimit THEN rPlatBotSlope := -rPlatSlopeLimit; END_IF
-            END_IF
-
             // 端点幅值自学习（加法型，所有波形通用）
             rPeakErrSum   := rPeakErrSum   + rPeakError;
             rValleyErrSum := rValleyErrSum + rValleyError;
@@ -412,22 +352,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         rScalePos := (rVMax - rMidpoint) / rHalfRange;
         rScaleNeg := (rMidpoint - rVMin) / rHalfRange;
     END_IF
-
-    // 缓存梯形/矩形平台 phase 边界
-    IF nWaveType = 3 OR nWaveType = 4 THEN
-        rT1Cached    := rAlpha12Cmd[1];
-        rT6Cached    := rT1Cached + rAlpha12Cmd[2] + rAlpha12Cmd[3]
-                     + rAlpha12Cmd[4] + rAlpha12Cmd[5] + rAlpha12Cmd[6];
-        rT7Cached    := rT6Cached + rAlpha12Cmd[7];
-        rBotMidPhase := rT1Cached * 0.5;
-        rTopMidPhase := (rT6Cached + rT7Cached) * 0.5;
-    END_IF
-
-    // 复位平台 ramp 学习累加
-    rFbSumBotFirst := 0.0; rFbSumBotSecond := 0.0;
-    rFbSumTopFirst := 0.0; rFbSumTopSecond := 0.0;
-    iCntBotFirst := 0; iCntBotSecond := 0;
-    iCntTopFirst := 0; iCntTopSecond := 0;
 
 END_IF
 
@@ -560,29 +484,6 @@ IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 AND rHalfRange > 0.001 T
         END_IF
     END_IF
     iFbBin12[iBinK] := iFbBin12[iBinK] + 1;
-END_IF
-
-// --------- 平台 ramp 学习：fb 在 cmd 平台前/后半段累加 ---------
-IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 THEN
-    IF rPhi < rT1Cached AND rT1Cached > 0.001 THEN
-        // 在底部平台 phase 区间内
-        IF rPhi < rBotMidPhase THEN
-            rFbSumBotFirst := rFbSumBotFirst + rActual;
-            iCntBotFirst   := iCntBotFirst + 1;
-        ELSE
-            rFbSumBotSecond := rFbSumBotSecond + rActual;
-            iCntBotSecond   := iCntBotSecond + 1;
-        END_IF
-    ELSIF rPhi >= rT6Cached AND rPhi < rT7Cached AND (rT7Cached - rT6Cached) > 0.001 THEN
-        // 在顶部平台 phase 区间内
-        IF rPhi < rTopMidPhase THEN
-            rFbSumTopFirst := rFbSumTopFirst + rActual;
-            iCntTopFirst   := iCntTopFirst + 1;
-        ELSE
-            rFbSumTopSecond := rFbSumTopSecond + rActual;
-            iCntTopSecond   := iCntTopSecond + 1;
-        END_IF
-    END_IF
 END_IF
 
 // ============================================================
@@ -724,24 +625,6 @@ END_IF
 // 仿射重映射 [tMin, tMax] → [vMin, vMax]
 rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
-
-// 梯形/矩形平台线性 ramp 修正：cmd 在平台内从 base-slope/2 线性升到 base+slope/2
-// local_phi ∈ [0, 1] 平台内归一相位，居中偏置 (local_phi - 0.5) ∈ [-0.5, +0.5]
-IF nWaveType = 3 OR nWaveType = 4 THEN
-    IF rPhi < rT1Cached THEN
-        rPlateauWidth := rT1Cached;
-        IF rPlateauWidth > 0.001 THEN
-            rLocalPhi      := rPhi / rPlateauWidth;
-            rVirtualTarget := rVirtualTarget + rPlatBotSlope * (rLocalPhi - 0.5);
-        END_IF
-    ELSIF rPhi >= rT6Cached AND rPhi < rT7Cached THEN
-        rPlateauWidth := rT7Cached - rT6Cached;
-        IF rPlateauWidth > 0.001 THEN
-            rLocalPhi      := (rPhi - rT6Cached) / rPlateauWidth;
-            rVirtualTarget := rVirtualTarget + rPlatTopSlope * (rLocalPhi - 0.5);
-        END_IF
-    END_IF
-END_IF
 
 rOutput := rVirtualTarget - rTargetRaw;
 
