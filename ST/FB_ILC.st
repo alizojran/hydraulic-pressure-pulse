@@ -289,16 +289,18 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         IF iIterCount = nWarmupCycles AND NOT bWaveDetected AND iTotalDetectCount > 20 THEN
             rFlatFrac := INT_TO_REAL(iNearExtCount)        / INT_TO_REAL(iTotalDetectCount);
             rSymFrac  := INT_TO_REAL(iTargetAboveMidCount) / INT_TO_REAL(iTotalDetectCount);
-            IF rSymFrac < 0.35 OR rSymFrac > 0.65 THEN
-                nWaveType := 5;
-            ELSIF rFlatFrac > FLAT_THR_TRAP THEN
-                nWaveType := 4;
+            // 先按平台占比判类型；对称性只用于区分正弦/三角
+            // 梯形/矩形即使非对称（底平 ≠ 顶平宽度）也走 12 段 α 路径
+            IF rFlatFrac > FLAT_THR_TRAP THEN
+                nWaveType := 4;       // 矩形
             ELSIF rFlatFrac > FLAT_THR_SIN THEN
-                nWaveType := 3;
+                nWaveType := 3;       // 梯形（允许非对称）
+            ELSIF rSymFrac < 0.35 OR rSymFrac > 0.65 THEN
+                nWaveType := 5;       // 任意波（无平台且非对称）
             ELSIF rFlatFrac > FLAT_THR_TRI THEN
-                nWaveType := 1;
+                nWaveType := 1;       // 正弦
             ELSE
-                nWaveType := 2;
+                nWaveType := 2;       // 三角
             END_IF
             bWaveDetected := TRUE;
         END_IF
