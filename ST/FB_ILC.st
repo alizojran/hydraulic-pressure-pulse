@@ -11,10 +11,6 @@ VAR_INPUT
 	rLearningRate   : REAL := 0.3;   // 端点学习率
 	rAlphaLR        : REAL := 0.2;   // α 学习率（正弦 + 三角）
 	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（仅对正弦 / 三角生效）
-	// 三角波峰/谷过冲脉冲（仅 nWaveType=2 生效）
-	bOvershootEnable: BOOL := TRUE;
-	rOvershootLR    : REAL := 0.15;  // 过冲振幅学习率
-	rOvershootWidth : REAL := 0.08;  // 脉冲在标准相位 φ_std 上的半全宽（占周期比例）
 	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正，同时完成波形类型检测
 END_VAR
 VAR_OUTPUT
@@ -34,11 +30,6 @@ VAR_OUTPUT
 	rAlphaCmd      : ARRAY [1..8] OF REAL;
 	rAlphaTgt      : ARRAY [1..8] OF REAL;
 	rAlphaFb       : ARRAY [1..8] OF REAL;
-	// 三角波过冲（顶部正、谷底负）
-	rOvershootTop  : REAL;
-	rOvershootBot  : REAL;
-	rFbInPeakWin   : REAL;           // 峰值窗口内反馈最大值（诊断）
-	rFbInValleyWin : REAL;           // 谷值窗口内反馈最小值（诊断）
 	// 波形检测
 	nWaveType      : INT  := 0;      // 0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波
 	rFlatFrac      : REAL;
@@ -90,11 +81,6 @@ VAR
 	rNorm            : REAL;
 	rLimit           : REAL;
 	rBinTotal        : REAL;
-	// 过冲脉冲临时量
-	rPulseDist       : REAL;
-	rPulseHalfWidth  : REAL;
-	rPulseShape      : REAL;
-	rOvershootLimit  : REAL;
 	// 波形检测
 	iNearExtCount       : INT;
 	iTargetAboveMidCount: INT;
@@ -110,8 +96,6 @@ VAR CONSTANT
 	FLAT_THR_SIN      : REAL := 0.40;
 	FLAT_THR_TRAP     : REAL := 0.70;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
-	OVERSHOOT_LIMIT_K : REAL := 0.30;   // 过冲振幅最大 0.30 * halfRange
-	PI_CONST          : REAL := 3.141592654;
 END_VAR
 
 
@@ -152,8 +136,6 @@ IF bReset OR NOT bEnable THEN
             rAlphaTgt[iBinK] := 0.125;
             rAlphaFb[iBinK]  := 0.125;
         END_FOR
-        rOvershootTop := 0.0;
-        rOvershootBot := 0.0;
     END_IF
     rOutput        := 0.0;
     rVirtualTarget := 0.0;
@@ -168,8 +150,6 @@ IF bReset OR NOT bEnable THEN
         iTgtBin[iBinK] := 0;
         iFbBin[iBinK]  := 0;
     END_FOR
-    rFbInPeakWin   := -1.0E30;
-    rFbInValleyWin :=  1.0E30;
     bNewCyclePrev  := FALSE;
     IF NOT bEnable THEN
         RETURN;
@@ -298,23 +278,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 rValleyErrSum := 0.0;
                 nUpdateCount  := 0;
             END_IF
-
-            // 三角波峰/谷过冲脉冲学习（与端点解耦：用峰/谷窗口内反馈极值）
-            IF nWaveType = 2 AND bOvershootEnable THEN
-                IF rFbInPeakWin > -1.0E29 THEN
-                    rOvershootTop := rOvershootTop
-                                   + rOvershootLR * (rPrevTargetMax - rFbInPeakWin);
-                END_IF
-                IF rFbInValleyWin < 1.0E29 THEN
-                    rOvershootBot := rOvershootBot
-                                   + rOvershootLR * (rPrevTargetMin - rFbInValleyWin);
-                END_IF
-                rOvershootLimit := OVERSHOOT_LIMIT_K * rHalfRange;
-                IF rOvershootTop >  rOvershootLimit THEN rOvershootTop :=  rOvershootLimit; END_IF
-                IF rOvershootTop < -rOvershootLimit THEN rOvershootTop := -rOvershootLimit; END_IF
-                IF rOvershootBot >  rOvershootLimit THEN rOvershootBot :=  rOvershootLimit; END_IF
-                IF rOvershootBot < -rOvershootLimit THEN rOvershootBot := -rOvershootLimit; END_IF
-            END_IF
         END_IF
     END_IF
 
@@ -323,10 +286,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         rScalePos := (rVMax - rMidpoint) / rHalfRange;
         rScaleNeg := (rMidpoint - rVMin) / rHalfRange;
     END_IF
-
-    // 复位窗口统计
-    rFbInPeakWin   := -1.0E30;
-    rFbInValleyWin :=  1.0E30;
 
 END_IF
 
@@ -351,18 +310,6 @@ IF rActual    < rActualMin THEN rActualMin := rActual;    END_IF
 
 rErrorSum2  := rErrorSum2 + (rTargetRaw - rActual) * (rTargetRaw - rActual);
 iErrorCount := iErrorCount + 1;
-
-// 三角波峰/谷窗口反馈极值跟踪（用于过冲学习）
-// 窗口位置基于原始相位 rPhi：峰窗在 0.5±halfWidth，谷窗在 0±halfWidth 与 1±halfWidth 合并
-IF nWaveType = 2 AND iIterCount >= 1 THEN
-    rPulseHalfWidth := rOvershootWidth * 0.5;
-    IF ABS(rPhi - 0.5) < rPulseHalfWidth THEN
-        IF rActual > rFbInPeakWin THEN rFbInPeakWin := rActual; END_IF
-    END_IF
-    IF rPhi < rPulseHalfWidth OR rPhi > (1.0 - rPulseHalfWidth) THEN
-        IF rActual < rFbInValleyWin THEN rFbInValleyWin := rActual; END_IF
-    END_IF
-END_IF
 
 // 波形类型检测
 IF NOT bWaveDetected AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
@@ -492,27 +439,6 @@ END_IF
 // 仿射重映射 [tMin, tMax] → [vMin, vMax]
 rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
-
-// 三角波过冲脉冲叠加（Hann，分别在峰 φ_std=0.5、谷 φ_std=0/1）
-IF nWaveType = 2 AND bOvershootEnable THEN
-    rPulseHalfWidth := rOvershootWidth * 0.5;
-    // 峰脉冲
-    rPulseDist := ABS(rPhiStd - 0.5);
-    IF rPulseDist < rPulseHalfWidth AND rPulseHalfWidth > 0.001 THEN
-        rPulseShape    := 0.5 * (1.0 + COS(PI_CONST * rPulseDist / rPulseHalfWidth));
-        rVirtualTarget := rVirtualTarget + rOvershootTop * rPulseShape;
-    END_IF
-    // 谷脉冲（在 0 和 1 处，取最近距离）
-    IF rPhiStd < 0.5 THEN
-        rPulseDist := rPhiStd;
-    ELSE
-        rPulseDist := 1.0 - rPhiStd;
-    END_IF
-    IF rPulseDist < rPulseHalfWidth AND rPulseHalfWidth > 0.001 THEN
-        rPulseShape    := 0.5 * (1.0 + COS(PI_CONST * rPulseDist / rPulseHalfWidth));
-        rVirtualTarget := rVirtualTarget + rOvershootBot * rPulseShape;
-    END_IF
-END_IF
 
 rOutput := rVirtualTarget - rTargetRaw;
 
