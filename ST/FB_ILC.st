@@ -30,10 +30,10 @@ VAR_OUTPUT
 	rAlphaCmd      : ARRAY [1..8] OF REAL;
 	rAlphaTgt      : ARRAY [1..8] OF REAL;
 	rAlphaFb       : ARRAY [1..8] OF REAL;
-	// 6 段 α 时长占比（梯形 / 矩形共用：底平/升下/升上/顶平/降上/降下）
-	rAlpha6Cmd     : ARRAY [1..6] OF REAL;
-	rAlpha6Tgt     : ARRAY [1..6] OF REAL;
-	rAlpha6Fb      : ARRAY [1..6] OF REAL;
+	// 12 段 α 时长占比（梯形 / 矩形共用：底平 / 升 1..5 / 顶平 / 降 1..5）
+	rAlpha12Cmd    : ARRAY [1..12] OF REAL;
+	rAlpha12Tgt    : ARRAY [1..12] OF REAL;
+	rAlpha12Fb     : ARRAY [1..12] OF REAL;
 	// 波形检测
 	nWaveType      : INT  := 0;      // 0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波
 	rFlatFrac      : REAL;
@@ -62,10 +62,10 @@ VAR
 	iTgtBin          : ARRAY [1..8] OF INT;
 	iFbBin           : ARRAY [1..8] OF INT;
 	iBinTotal        : INT;
-	// 6 段 α 状态
-	iTgtBin6         : ARRAY [1..6] OF INT;
-	iFbBin6          : ARRAY [1..6] OF INT;
-	iBinTotal6       : INT;
+	// 12 段 α 状态
+	iTgtBin12        : ARRAY [1..12] OF INT;
+	iFbBin12         : ARRAY [1..12] OF INT;
+	iBinTotal12      : INT;
 	rTargetPrev      : REAL;
 	bTgtRising       : BOOL;
 	rActualPrev      : REAL;
@@ -81,6 +81,15 @@ VAR
 	rT5              : REAL;
 	rT6              : REAL;
 	rT7              : REAL;
+	rT8              : REAL;
+	rT9              : REAL;
+	rT10             : REAL;
+	rT11             : REAL;
+	rBand1           : REAL;
+	rBand2           : REAL;
+	rBand3           : REAL;
+	rBand4           : REAL;
+	rPlateauThr      : REAL;
 	rDelta           : REAL;
 	rPhi             : REAL;
 	rPhiStd          : REAL;
@@ -98,8 +107,8 @@ END_VAR
 VAR CONSTANT
 	ALPHA_Q_MIN       : REAL := 0.04;
 	ALPHA_Q_MAX       : REAL := 0.35;
-	ALPHA6_Q_MIN      : REAL := 0.04;
-	ALPHA6_Q_MAX      : REAL := 0.45;
+	ALPHA12_Q_MIN     : REAL := 0.02;
+	ALPHA12_Q_MAX     : REAL := 0.45;
 	PLATEAU_BAND_K    : REAL := 0.7;     // 平台判定带：|y - mid| > K * halfRange
 	TWO_PI            : REAL := 6.283185307;
 	CYCLES_PER_UPDATE : INT  := 2;
@@ -147,11 +156,11 @@ IF bReset OR NOT bEnable THEN
             rAlphaTgt[iBinK] := 0.125;
             rAlphaFb[iBinK]  := 0.125;
         END_FOR
-        // 6 段 α 默认均分（1/6 ≈ 0.16667）
-        FOR iBinK := 1 TO 6 DO
-            rAlpha6Cmd[iBinK] := 0.16667;
-            rAlpha6Tgt[iBinK] := 0.16667;
-            rAlpha6Fb[iBinK]  := 0.16667;
+        // 12 段 α 默认均分（1/12 ≈ 0.08333）
+        FOR iBinK := 1 TO 12 DO
+            rAlpha12Cmd[iBinK] := 0.08333;
+            rAlpha12Tgt[iBinK] := 0.08333;
+            rAlpha12Fb[iBinK]  := 0.08333;
         END_FOR
     END_IF
     rOutput        := 0.0;
@@ -167,11 +176,11 @@ IF bReset OR NOT bEnable THEN
         iTgtBin[iBinK] := 0;
         iFbBin[iBinK]  := 0;
     END_FOR
-    FOR iBinK := 1 TO 6 DO
-        iTgtBin6[iBinK] := 0;
-        iFbBin6[iBinK]  := 0;
+    FOR iBinK := 1 TO 12 DO
+        iTgtBin12[iBinK] := 0;
+        iFbBin12[iBinK]  := 0;
     END_FOR
-    iBinTotal6     := 0;
+    iBinTotal12    := 0;
     bNewCyclePrev  := FALSE;
     IF NOT bEnable THEN
         RETURN;
@@ -208,19 +217,19 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     END_FOR
     iBinTotal := 0;
 
-    // 6 段分布归一
-    IF iBinTotal6 > 0 THEN
-        rBinTotal := INT_TO_REAL(iBinTotal6);
-        FOR iBinK := 1 TO 6 DO
-            rAlpha6Tgt[iBinK] := INT_TO_REAL(iTgtBin6[iBinK]) / rBinTotal;
-            rAlpha6Fb[iBinK]  := INT_TO_REAL(iFbBin6[iBinK])  / rBinTotal;
+    // 12 段分布归一
+    IF iBinTotal12 > 0 THEN
+        rBinTotal := INT_TO_REAL(iBinTotal12);
+        FOR iBinK := 1 TO 12 DO
+            rAlpha12Tgt[iBinK] := INT_TO_REAL(iTgtBin12[iBinK]) / rBinTotal;
+            rAlpha12Fb[iBinK]  := INT_TO_REAL(iFbBin12[iBinK])  / rBinTotal;
         END_FOR
     END_IF
-    FOR iBinK := 1 TO 6 DO
-        iTgtBin6[iBinK] := 0;
-        iFbBin6[iBinK]  := 0;
+    FOR iBinK := 1 TO 12 DO
+        iTgtBin12[iBinK] := 0;
+        iFbBin12[iBinK]  := 0;
     END_FOR
-    iBinTotal6 := 0;
+    iBinTotal12 := 0;
 
     // 端点误差
     rPeakError   := rTargetMax - rActualMax;
@@ -293,21 +302,21 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // α 6 段自学习（梯形 nWaveType=3 + 矩形 nWaveType=4）
+            // α 12 段自学习（梯形 nWaveType=3 + 矩形 nWaveType=4）
             IF bAlphaEnable AND (nWaveType = 3 OR nWaveType = 4) THEN
-                FOR iBinK := 1 TO 6 DO
-                    rAlpha6Cmd[iBinK] := rAlpha6Cmd[iBinK]
-                                      + rAlphaLR * (rAlpha6Tgt[iBinK] - rAlpha6Fb[iBinK]);
-                    IF rAlpha6Cmd[iBinK] < ALPHA6_Q_MIN THEN rAlpha6Cmd[iBinK] := ALPHA6_Q_MIN; END_IF
-                    IF rAlpha6Cmd[iBinK] > ALPHA6_Q_MAX THEN rAlpha6Cmd[iBinK] := ALPHA6_Q_MAX; END_IF
+                FOR iBinK := 1 TO 12 DO
+                    rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK]
+                                       + rAlphaLR * (rAlpha12Tgt[iBinK] - rAlpha12Fb[iBinK]);
+                    IF rAlpha12Cmd[iBinK] < ALPHA12_Q_MIN THEN rAlpha12Cmd[iBinK] := ALPHA12_Q_MIN; END_IF
+                    IF rAlpha12Cmd[iBinK] > ALPHA12_Q_MAX THEN rAlpha12Cmd[iBinK] := ALPHA12_Q_MAX; END_IF
                 END_FOR
                 rAlphaSum := 0.0;
-                FOR iBinK := 1 TO 6 DO
-                    rAlphaSum := rAlphaSum + rAlpha6Cmd[iBinK];
+                FOR iBinK := 1 TO 12 DO
+                    rAlphaSum := rAlphaSum + rAlpha12Cmd[iBinK];
                 END_FOR
                 IF rAlphaSum > 0.001 THEN
-                    FOR iBinK := 1 TO 6 DO
-                        rAlpha6Cmd[iBinK] := rAlpha6Cmd[iBinK] / rAlphaSum;
+                    FOR iBinK := 1 TO 12 DO
+                        rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK] / rAlphaSum;
                     END_FOR
                 END_IF
             END_IF
@@ -419,34 +428,60 @@ IF (nWaveType = 1 OR nWaveType = 2) AND iIterCount >= 1 AND rHalfRange > 0.001 T
     iFbBin[iBinK] := iFbBin[iBinK] + 1;
 END_IF
 
-// --------- 6 段分箱（梯形 + 矩形共用）---------
-// 1=底平, 2=升下, 3=升上, 4=顶平, 5=降上, 6=降下
+// --------- 12 段分箱（梯形 + 矩形共用）---------
+// 1=底平; 2..6=升 5 子段（自下而上）; 7=顶平; 8..12=降 5 子段（自上而下）
+// 斜坡振幅区间 [-PLATEAU_BAND_K, +PLATEAU_BAND_K]·hR 五等分
 IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
-    iBinTotal6 := iBinTotal6 + 1;
-    rLimit  := PLATEAU_BAND_K * rHalfRange;
+    iBinTotal12 := iBinTotal12 + 1;
+    rPlateauThr := PLATEAU_BAND_K * rHalfRange;
+    rBand1 := -0.6 * rPlateauThr;   // = -0.42 hR
+    rBand2 := -0.2 * rPlateauThr;   // = -0.14 hR
+    rBand3 :=  0.2 * rPlateauThr;   // = +0.14 hR
+    rBand4 :=  0.6 * rPlateauThr;   // = +0.42 hR
+
     rTgtPos := rTargetRaw - rMidpoint;
-    IF rTgtPos < -rLimit THEN
+    IF rTgtPos < -rPlateauThr THEN
         iBinK := 1;
-    ELSIF rTgtPos > rLimit THEN
-        iBinK := 4;
+    ELSIF rTgtPos > rPlateauThr THEN
+        iBinK := 7;
     ELSIF bTgtRising THEN
-        IF rTgtPos < 0.0 THEN iBinK := 2; ELSE iBinK := 3; END_IF
+        IF      rTgtPos < rBand1 THEN iBinK := 2;
+        ELSIF   rTgtPos < rBand2 THEN iBinK := 3;
+        ELSIF   rTgtPos < rBand3 THEN iBinK := 4;
+        ELSIF   rTgtPos < rBand4 THEN iBinK := 5;
+        ELSE                          iBinK := 6;
+        END_IF
     ELSE
-        IF rTgtPos >= 0.0 THEN iBinK := 5; ELSE iBinK := 6; END_IF
+        IF      rTgtPos > rBand4 THEN iBinK := 8;
+        ELSIF   rTgtPos > rBand3 THEN iBinK := 9;
+        ELSIF   rTgtPos > rBand2 THEN iBinK := 10;
+        ELSIF   rTgtPos > rBand1 THEN iBinK := 11;
+        ELSE                          iBinK := 12;
+        END_IF
     END_IF
-    iTgtBin6[iBinK] := iTgtBin6[iBinK] + 1;
+    iTgtBin12[iBinK] := iTgtBin12[iBinK] + 1;
 
     rFbPos := rActual - rMidpoint;
-    IF rFbPos < -rLimit THEN
+    IF rFbPos < -rPlateauThr THEN
         iBinK := 1;
-    ELSIF rFbPos > rLimit THEN
-        iBinK := 4;
+    ELSIF rFbPos > rPlateauThr THEN
+        iBinK := 7;
     ELSIF bFbRising THEN
-        IF rFbPos < 0.0 THEN iBinK := 2; ELSE iBinK := 3; END_IF
+        IF      rFbPos < rBand1 THEN iBinK := 2;
+        ELSIF   rFbPos < rBand2 THEN iBinK := 3;
+        ELSIF   rFbPos < rBand3 THEN iBinK := 4;
+        ELSIF   rFbPos < rBand4 THEN iBinK := 5;
+        ELSE                         iBinK := 6;
+        END_IF
     ELSE
-        IF rFbPos >= 0.0 THEN iBinK := 5; ELSE iBinK := 6; END_IF
+        IF      rFbPos > rBand4 THEN iBinK := 8;
+        ELSIF   rFbPos > rBand3 THEN iBinK := 9;
+        ELSIF   rFbPos > rBand2 THEN iBinK := 10;
+        ELSIF   rFbPos > rBand1 THEN iBinK := 11;
+        ELSE                         iBinK := 12;
+        END_IF
     END_IF
-    iFbBin6[iBinK] := iFbBin6[iBinK] + 1;
+    iFbBin12[iBinK] := iFbBin12[iBinK] + 1;
 END_IF
 
 // ============================================================
@@ -519,34 +554,65 @@ IF nWaveType = 1 OR nWaveType = 2 THEN
     rSourceTarget := rPrevTargetMin + rWarpedY * rPrevTargetRange;
 
 ELSIF nWaveType = 3 OR nWaveType = 4 THEN
-    // 梯形 / 矩形：6 段相位重映射 + 梯形模板
-    // 模板：底平(0) → 升下(0→0.5) → 升上(0.5→1) → 顶平(1) → 降上(1→0.5) → 降下(0.5→0)
-    rT1 := rAlpha6Cmd[1];
-    rT2 := rT1 + rAlpha6Cmd[2];
-    rT3 := rT2 + rAlpha6Cmd[3];
-    rT4 := rT3 + rAlpha6Cmd[4];
-    rT5 := rT4 + rAlpha6Cmd[5];
+    // 梯形 / 矩形：12 段相位重映射 + 梯形模板
+    // 模板（标准振幅 0..1）：
+    //   底平(0) → 升 0→0.2→0.4→0.6→0.8→1 → 顶平(1) → 降 1→0.8→0.6→0.4→0.2→0
+    rT1  := rAlpha12Cmd[1];
+    rT2  := rT1  + rAlpha12Cmd[2];
+    rT3  := rT2  + rAlpha12Cmd[3];
+    rT4  := rT3  + rAlpha12Cmd[4];
+    rT5  := rT4  + rAlpha12Cmd[5];
+    rT6  := rT5  + rAlpha12Cmd[6];
+    rT7  := rT6  + rAlpha12Cmd[7];
+    rT8  := rT7  + rAlpha12Cmd[8];
+    rT9  := rT8  + rAlpha12Cmd[9];
+    rT10 := rT9  + rAlpha12Cmd[10];
+    rT11 := rT10 + rAlpha12Cmd[11];
 
     IF rPhi < rT1 THEN
         rWarpedY := 0.0;
     ELSIF rPhi < rT2 THEN
         rDelta := rT2 - rT1;
-        IF rDelta > 0.001 THEN rWarpedY := (rPhi - rT1) / rDelta * 0.5;
-        ELSE rWarpedY := 0.25; END_IF
+        IF rDelta > 0.001 THEN rWarpedY := (rPhi - rT1) / rDelta * 0.2;
+        ELSE rWarpedY := 0.1; END_IF
     ELSIF rPhi < rT3 THEN
         rDelta := rT3 - rT2;
-        IF rDelta > 0.001 THEN rWarpedY := 0.5 + (rPhi - rT2) / rDelta * 0.5;
-        ELSE rWarpedY := 0.75; END_IF
+        IF rDelta > 0.001 THEN rWarpedY := 0.2 + (rPhi - rT2) / rDelta * 0.2;
+        ELSE rWarpedY := 0.3; END_IF
     ELSIF rPhi < rT4 THEN
-        rWarpedY := 1.0;
+        rDelta := rT4 - rT3;
+        IF rDelta > 0.001 THEN rWarpedY := 0.4 + (rPhi - rT3) / rDelta * 0.2;
+        ELSE rWarpedY := 0.5; END_IF
     ELSIF rPhi < rT5 THEN
         rDelta := rT5 - rT4;
-        IF rDelta > 0.001 THEN rWarpedY := 1.0 - (rPhi - rT4) / rDelta * 0.5;
-        ELSE rWarpedY := 0.75; END_IF
+        IF rDelta > 0.001 THEN rWarpedY := 0.6 + (rPhi - rT4) / rDelta * 0.2;
+        ELSE rWarpedY := 0.7; END_IF
+    ELSIF rPhi < rT6 THEN
+        rDelta := rT6 - rT5;
+        IF rDelta > 0.001 THEN rWarpedY := 0.8 + (rPhi - rT5) / rDelta * 0.2;
+        ELSE rWarpedY := 0.9; END_IF
+    ELSIF rPhi < rT7 THEN
+        rWarpedY := 1.0;
+    ELSIF rPhi < rT8 THEN
+        rDelta := rT8 - rT7;
+        IF rDelta > 0.001 THEN rWarpedY := 1.0 - (rPhi - rT7) / rDelta * 0.2;
+        ELSE rWarpedY := 0.9; END_IF
+    ELSIF rPhi < rT9 THEN
+        rDelta := rT9 - rT8;
+        IF rDelta > 0.001 THEN rWarpedY := 0.8 - (rPhi - rT8) / rDelta * 0.2;
+        ELSE rWarpedY := 0.7; END_IF
+    ELSIF rPhi < rT10 THEN
+        rDelta := rT10 - rT9;
+        IF rDelta > 0.001 THEN rWarpedY := 0.6 - (rPhi - rT9) / rDelta * 0.2;
+        ELSE rWarpedY := 0.5; END_IF
+    ELSIF rPhi < rT11 THEN
+        rDelta := rT11 - rT10;
+        IF rDelta > 0.001 THEN rWarpedY := 0.4 - (rPhi - rT10) / rDelta * 0.2;
+        ELSE rWarpedY := 0.3; END_IF
     ELSE
-        rDelta := 1.0 - rT5;
-        IF rDelta > 0.001 THEN rWarpedY := 0.5 - (rPhi - rT5) / rDelta * 0.5;
-        ELSE rWarpedY := 0.25; END_IF
+        rDelta := 1.0 - rT11;
+        IF rDelta > 0.001 THEN rWarpedY := 0.2 - (rPhi - rT11) / rDelta * 0.2;
+        ELSE rWarpedY := 0.1; END_IF
     END_IF
     rSourceTarget := rPrevTargetMin + rWarpedY * rPrevTargetRange;
 
