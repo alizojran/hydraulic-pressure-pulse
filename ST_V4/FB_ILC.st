@@ -129,29 +129,21 @@ VAR
 	bWaveDetected : BOOL;
 END_VAR
 VAR CONSTANT
-	// 8 段 α 钳位（正弦/三角共用）
-	ALPHA_Q_MIN : REAL := 0.04;
-	ALPHA_Q_MAX : REAL := 0.30;
-	// 12 段 α 钳位（梯形/矩形共用）
-	ALPHA12_Q_MIN : REAL := 0.02;
-	ALPHA12_Q_MAX : REAL := 0.60;
-	// 梯形/矩形 12 段分箱阈值，平台区 = [|tgtPos| > PLATEAU_BAND_K × hR]
-	PLATEAU_BAND_K : REAL := 0.7;
-	// 平台分 2 段幅值修正
-	PLAT_TGT_MIN_FRAC : REAL := 0.03;   // 目标平台时间占比 < 3% 时跳过学习
-	PLAT_CORR_LR : REAL := 0.3;          // 平台修正学习率
-	PLAT_CORR_DECAY : REAL := 0.95;      // 跳过学习时的衰减系数
-	PLAT_CORR_LIMIT_K : REAL := 0.3;     // 平台修正限幅 = K × hR
-	// vMax/vMin 学习限幅 = K × prevTargetRange
-	V_RANGE_LIMIT_K : REAL := 1.5;
-	// 波形类型检测阈值（rFlatFrac = iNearExtCount / iTotalDetectCount）
-	FLAT_THR_TRAP : REAL := 0.45;
-	FLAT_THR_SIN : REAL := 0.15;
-	FLAT_THR_TRI : REAL := 0.03;
-	// 学习节流
-	CYCLES_PER_UPDATE : INT := 1;
-	// 数学常量
-	TWO_PI : REAL := 6.283185307179586;
+	ALPHA_Q_MIN       : REAL := 0.04;
+	ALPHA_Q_MAX       : REAL := 0.35;
+	ALPHA12_Q_MIN     : REAL := 0.02;
+	ALPHA12_Q_MAX     : REAL := 0.45;
+	PLATEAU_BAND_K    : REAL := 0.7;     // 平台判定带：|y - mid| > K * halfRange
+	PLAT_CORR_LR      : REAL := 0.3;     // 平台幅值修正学习率
+	PLAT_CORR_LIMIT_K : REAL := 0.3;     // 平台幅值修正上限：0.3 * halfRange
+	PLAT_TGT_MIN_FRAC : REAL := 0.03;    // 目标平台占比阈值：低于此值视为"没有平台"，跳过修正学习
+	PLAT_CORR_DECAY   : REAL := 0.9;     // 跳过学习时的修正衰减系数
+	TWO_PI            : REAL := 6.283185307;
+	CYCLES_PER_UPDATE : INT  := 2;
+	FLAT_THR_TRI      : REAL := 0.15;
+	FLAT_THR_SIN      : REAL := 0.40;
+	FLAT_THR_TRAP     : REAL := 0.70;
+	V_RANGE_LIMIT_K   : REAL := 2.0;
 END_VAR
 // ============================================================
 // 复位 / 禁用
