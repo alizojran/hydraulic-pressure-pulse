@@ -25,7 +25,7 @@ VAR_GLOBAL
 	PP_Water_ILC_MaxIter : REAL; // 水路ILC最大迭代次数
 	PP_Water_ILC_LearningRate : REAL; // 水路ILC学习率(0~1)，0=使用容积自适应默认值
 	PP_Water_BurstPressure : REAL; // 水路爆破模式目标压力(MPa)，保压平台
-	PP_Water_RiseTime : REAL; // 水路爆破上升时间(s)，0→BurstPressure 的耗时
+	PP_Water_RiseRate : REAL; // 水路爆破升压速率(MPa/s)
 	PP_Water_HoldTime : REAL; // 水路爆破测试保压时间(s)
 	PP_Water_BurstRate2 : REAL; // 水路爆破续升速率(MPa/s)，保压后继续升压用
 	PP_Water_BurstMaxLimit : REAL; // 水路爆破最大安全压力(MPa)；给定值到此停机，避免无限升压
@@ -48,7 +48,7 @@ VAR_GLOBAL
 	PP_Oil_ILC_MaxIter : REAL; // 油路ILC最大迭代次数
 	PP_Oil_ILC_LearningRate : REAL; // 油路ILC学习率(0~1)，0=使用容积自适应默认值
 	PP_Oil_BurstPressure : REAL; // 油路爆破模式目标压力(MPa)，保压平台
-	PP_Oil_RiseTime : REAL; // 油路爆破上升时间(s)，0→BurstPressure 的耗时
+	PP_Oil_RiseRate : REAL; // 油路爆破升压速率(MPa/s)
 	PP_Oil_HoldTime : REAL; // 油路爆破测试保压时间(s)
 	PP_Oil_BurstRate2 : REAL; // 油路爆破续升速率(MPa/s)，保压后继续升压用
 	PP_Oil_BurstMaxLimit : REAL; // 油路爆破最大安全压力(MPa)；给定值到此停机，避免无限升压

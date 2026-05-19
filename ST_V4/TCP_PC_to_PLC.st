@@ -142,7 +142,7 @@ GVL_PulsePressure.PP_Water_BurstPressure := TwoWord_to_Float.Output;  // 60-61: 
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_RiseTime := TwoWord_to_Float.Output;       // 62-63: 水路爆破上升时间
+GVL_PulsePressure.PP_Water_RiseRate := TwoWord_to_Float.Output;       // 62-63: 水路爆破升压速率(MPa/s)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
@@ -228,7 +228,7 @@ GVL_PulsePressure.PP_Oil_BurstPressure := TwoWord_to_Float.Output;    // 108-109
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_RiseTime := TwoWord_to_Float.Output;         // 110-111: 油路爆破上升时间
+GVL_PulsePressure.PP_Oil_RiseRate := TwoWord_to_Float.Output;         // 110-111: 油路爆破升压速率(MPa/s)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);

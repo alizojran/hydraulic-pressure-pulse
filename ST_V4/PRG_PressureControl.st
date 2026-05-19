@@ -55,7 +55,7 @@ VAR
 	// 爆破: 水路
 	iBurstPhase_W : INT; // 0=升压 1=保压 2=续升 3=已爆破
 	rBurstSetpoint_W : REAL; // 给定压力(MPa)
-	rBurstRate1_W : REAL; // 初始升压速率(MPa/s) = BurstPressure / RiseTime
+	rBurstRate1_W : REAL; // 初始升压速率(MPa/s)，取自 PP_Water_RiseRate
 	rBurstRate2_W : REAL; // 续升速率(MPa/s)
 	rBurstHoldTimer_W : REAL; // 保压计时器(s)
 	rBurstPeak_W : REAL; // 运行最大压力(MPa)
@@ -430,7 +430,7 @@ CASE iState OF
 IF bBurstMode THEN
     // ================================================================
     // 爆破试验流程
-    //   相位0(升压):  以 rate1=BurstPressure/RiseTime 从 0 升至 BurstPressure
+    //   相位0(升压):  以 rate1=PP_*_RiseRate 从 0 升至 BurstPressure
     //   相位1(保压):  在 BurstPressure 上保持 HoldTime
     //   相位2(续升):  以 rate2=PP_*_BurstRate2 (默认沿用 rate1) 继续升压
     //   相位3(已爆破): 已记录峰值，进入状态4停机
@@ -442,9 +442,8 @@ IF bBurstMode THEN
     // ==================== 水路爆破 ====================
     IF bWaterActive THEN
         // 速率参数(每周期重算，允许在线调整)
-        IF GVL_PulsePressure.PP_Water_RiseTime > 0.001 THEN
-            rBurstRate1_W := GVL_PulsePressure.PP_Water_BurstPressure / GVL_PulsePressure.PP_Water_RiseTime;
-        ELSE
+        rBurstRate1_W := GVL_PulsePressure.PP_Water_RiseRate;
+        IF rBurstRate1_W <= 0.0 THEN
             rBurstRate1_W := 0.01;  // 安全兜底 0.01 MPa/s
         END_IF
         rBurstRate2_W := GVL_PulsePressure.PP_Water_BurstRate2;
@@ -515,9 +514,8 @@ IF bBurstMode THEN
 
     // ==================== 油路爆破 ====================
     IF bOilActive THEN
-        IF GVL_PulsePressure.PP_Oil_RiseTime > 0.001 THEN
-            rBurstRate1_O := GVL_PulsePressure.PP_Oil_BurstPressure / GVL_PulsePressure.PP_Oil_RiseTime;
-        ELSE
+        rBurstRate1_O := GVL_PulsePressure.PP_Oil_RiseRate;
+        IF rBurstRate1_O <= 0.0 THEN
             rBurstRate1_O := 0.01;
         END_IF
         rBurstRate2_O := GVL_PulsePressure.PP_Oil_BurstRate2;
