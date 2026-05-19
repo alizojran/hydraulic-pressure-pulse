@@ -38,6 +38,10 @@ VAR
 	rL : REAL; // 低保持段占比
 	rPhaseLead : REAL; // 超前相位值
 END_VAR
+VAR CONSTANT
+	MAX_LUT_POINTS : INT := 800; // LUT 最大点数（与 PP_WaveUpload_Data[0..799] 对齐）
+	RISE_RATIO_SQUARE : REAL := 0.08; // 方波过渡段占比（8% 周期）
+END_VAR
 
 IF bReset OR NOT bEnable THEN
     rPhaseAcc := 0.0;
