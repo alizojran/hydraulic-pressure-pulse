@@ -150,7 +150,7 @@ GVL_PulsePressure.PP_Water_HoldTime := TwoWord_to_Float.Output;       // 64-65: 
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_CycleReset := TwoWord_to_Float.Output;     // 66-67: 水路循环计数清零命令
+GVL_PulsePressure.PP_Water_BurstMaxLimit := TwoWord_to_Float.Output;  // 66-67: 水路爆破最大安全压力(MPa)
 
 // ============================================================
 // 油路控制参数区（WORD地址 66–109）
@@ -236,7 +236,7 @@ GVL_PulsePressure.PP_Oil_HoldTime := TwoWord_to_Float.Output;         // 112-113
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_CycleReset := TwoWord_to_Float.Output;       // 114-115: 油路循环计数清零命令
+GVL_PulsePressure.PP_Oil_BurstMaxLimit := TwoWord_to_Float.Output;    // 114-115: 油路爆破最大安全压力(MPa)
 i := i + 2;
 
 // ============================================================
@@ -429,11 +429,11 @@ GVL_PulsePressure.PP_Oil_BurstRate2 := TwoWord_to_Float.Output;    // 178-179: �
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_BurstMaxLimit := TwoWord_to_Float.Output; // 180-181: 水路爆破最大安全压力(MPa)
+GVL_PulsePressure.PP_Water_CycleReset := TwoWord_to_Float.Output;    // 180-181: 水路循环计数清零命令
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_BurstMaxLimit := TwoWord_to_Float.Output;   // 182-183: 油路爆破最大安全压力(MPa)
+GVL_PulsePressure.PP_Oil_CycleReset := TwoWord_to_Float.Output;      // 182-183: 油路循环计数清零命令
 
 // 184-199 保留
 
