@@ -167,9 +167,9 @@ j := j + 2;
 //
 // 总输出关系：ControlOutput(26-27) = MFF_Output(40-41) + ILC_Output(42-43) + ADRC_Output(46-47)
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_MFF_Output);
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_PID_Output);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 40-41: 水路模型前馈输出
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 40-41: 水路 PID 反馈输出 (V)
 j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ILC_Output);
@@ -182,15 +182,8 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 44-45: 水路ILC迭代次数
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ADRC_Output);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 46-47: 水路ADRC反馈输出
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ESO_Disturbance);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 48-49: 水路ESO扰动估计
-j := j + 2;
+// 46-49: 保留 (原 PP_Water_ADRC_Output / PP_Water_ESO_Disturbance，MFF/ADRC 已废弃)
+j := j + 4;
 
 // ============================================================
 // 【油路实时数据区】（WORD地址 50–79）
@@ -276,9 +269,9 @@ j := j + 2;
 //
 // 总输出关系：ControlOutput(56-57) = MFF_Output(70-71) + ILC_Output(72-73) + ADRC_Output(76-77)
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_MFF_Output);
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_PID_Output);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 70-71: 油路模型前馈输出
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 70-71: 油路 PID 反馈输出 (V)
 j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ILC_Output);
@@ -291,15 +284,8 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 74-75: 油路ILC迭代次数
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ADRC_Output);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 76-77: 油路ADRC反馈输出
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ESO_Disturbance);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 78-79: 油路ESO扰动估计
-j := j + 2;
+// 76-79: 保留 (原 PP_Oil_ADRC_Output / PP_Oil_ESO_Disturbance，MFF/ADRC 已废弃)
+j := j + 4;
 
 // ============================================================
 // 【液压站实时数据区】（WORD地址 80–91）
@@ -404,36 +390,19 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 110-111: 水路目标循环次数回读
 j := j + 2;
 
-// --- V2.1: 水路阀样本参数回读 + 反推Kv/τv诊断（110-121）---
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_VBase);
+// --- 水路 PID 参数回读 + 保留区 ---
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_PID_Kp);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 112-113: 水路基础容积回读
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 112-113: 水路 PID Kp 回读
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_VSpecimen);
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_PID_Ki);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 114-115: 水路被试件容积回读
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 114-115: 水路 PID Ki 回读
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_Kv);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 116-117: 水路反推Kv回读(诊断)
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_TauValve);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 118-119: 水路反推τv回读(诊断)
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ValveQnom);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 120-121: 水路阀额定流量回读
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ValveDPnom);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 122-123: 水路阀额定压降回读
-j := j + 2;
+// 116-123: 保留 (原水路 Kv / TauValve / ValveQnom / ValveDPnom 回读，MFF 已废弃)
+j := j + 8;
 
 // --- 油路运行参数回读（122-131）---
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_TargetPressure);
@@ -466,36 +435,19 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 134-135: 油路目标循环次数回读
 j := j + 2;
 
-// --- V2.1: 油路阀样本参数回读 + 反推Kv/τv诊断（132-143）---
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_VBase);
+// --- 油路 PID 参数回读 + 保留区 ---
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_PID_Kp);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 136-137: 油路基础容积回读
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 136-137: 油路 PID Kp 回读
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_VSpecimen);
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_PID_Ki);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 138-139: 油路被试件容积回读
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 138-139: 油路 PID Ki 回读
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_Kv);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 140-141: 油路反推Kv回读(诊断)
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_TauValve);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 142-143: 油路反推τv回读(诊断)
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ValveQnom);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 144-145: 油路阀额定流量回读
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ValveDPnom);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 146-147: 油路阀额定压降回读
-j := j + 2;
+// 140-147: 保留 (原油路 Kv / TauValve / ValveQnom / ValveDPnom 回读，MFF 已废弃)
+j := j + 8;
 
 // --- 液压站及全局参数回读（144-155）---
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Hydro_HighLimit);
@@ -513,15 +465,8 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 152-153: 当前测试模式回读
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Sys_BetaE);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 154-155: 体积弹性模量回读
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Sys_CLeak);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 156-157: 泄漏系数回读
-j := j + 2;
+// 154-157: 保留 (原 PP_Sys_BetaE / PP_Sys_CLeak 回读，MFF/ADRC 已废弃)
+j := j + 4;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ILC_LearningRate);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;

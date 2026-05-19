@@ -8,27 +8,21 @@ VAR
 	rCylinderPos : REAL; // 当前激活通道的油缸位置(mm)
 	rDt : REAL := 0.001; // 控制周期 1ms
 	fbWaveGen_W : FB_WaveformGen;
-	fbMFF_W : FB_ModelFeedforward;
-	fbADRC_W : FB_HydraulicADRC;
+	fbPID_W : FB_HydraulicPID;
 	fbILC_W : FB_ILC;
 	fbWaveGen_O : FB_WaveformGen;
-	fbMFF_O : FB_ModelFeedforward;
-	fbADRC_O : FB_HydraulicADRC;
+	fbPID_O : FB_HydraulicPID;
 	fbILC_O : FB_ILC;
-	rVTotal_W : REAL; // 水路总容积
-	rVTotal_O : REAL; // 油路总容积
-	rPs_Pa : REAL; // 供油压力 (Pa)
 	rError_W : REAL; // 水路跟踪误差
 	rError_O : REAL; // 油路跟踪误差
 	rUTotal_W : REAL; // 水路总控制量
 	rUTotal_O : REAL; // 油路总控制量
-	rUMff_W : REAL; // 水路MFF分量
-	rUIlc_W : REAL; // 水路ILC修正量 (MPa)
-	rUAdrc_W : REAL; // 水路ADRC分量
-	rTargetCorrected_W : REAL; // 水路ILC修正后的目标 (MPa)
-	rUMff_O : REAL;
+	rUIlc_W : REAL; // 水路 ILC 修正量 (V)，仅诊断不参与汇总
+	rUPid_W : REAL; // 水路 PID 反馈分量 (V)
+	rTargetCorrected_W : REAL; // 水路 ILC 修正后的目标 (MPa)
 	rUIlc_O : REAL;
-	rUAdrc_O : REAL;
+	rUPid_O : REAL;
+	rTargetCorrected_O : REAL;
 	bWaterActive : BOOL; // 水路激活
 	bOilActive : BOOL; // 油路激活
 	rPrePressTarget_W : REAL; // 水路预加压目标
@@ -51,10 +45,8 @@ VAR
 	bOilCycleResetPrev : BOOL; // 油路循环清零上升沿检测
 	bFlushDirection : BOOL; // 冲洗排气往复方向 FALSE=正向 TRUE=反向
 	rFlushToggleTimer : REAL; // 冲洗排气往复切换计时器(s)
-	nMffLeadSteps : INT; // MFF超前步数(上位机设置)
 	nPts : INT; // 波形上传点数
 	iCh : INT; // 波形上传通道
-	rTargetCorrected_O : REAL;
 	Water_Pressure_Filter : PWControl.LowPassFilter_R;
 	PP_Water_ActualPressure : REAL;
 	Oil_Pressure_Filter : PWControl.LowPassFilter_R;
@@ -251,19 +243,6 @@ END_IF
 
 
 // ============================================================
-// 计算系统参数
-// 供油压力的单位换算: MPa → Pa，并设置安全下限
-// 总容积 = 基础容积 + 被试件容积，并设置安全下限
-// ============================================================
-rPs_Pa := GVL_PulsePressure.PP_Hydro_WorkingPressure * 1.0E6;
-IF rPs_Pa < 1.0E6 THEN rPs_Pa := 35.0E6; END_IF  // 默认35MPa
-
-rVTotal_W := GVL_PulsePressure.PP_Water_VBase + GVL_PulsePressure.PP_Water_VSpecimen;
-rVTotal_O := GVL_PulsePressure.PP_Oil_VBase + GVL_PulsePressure.PP_Oil_VSpecimen;
-IF rVTotal_W < 1.0E-6 THEN rVTotal_W := 0.7E-3; END_IF  // 默认0.7L
-IF rVTotal_O < 1.0E-6 THEN rVTotal_O := 0.7E-3; END_IF
-
-// ============================================================
 // 计算实际PMin（直接使用上位机设定值，0即为0MPa）
 // ============================================================
 rActualPMin_W := GVL_PulsePressure.PP_Water_MinPressure;
@@ -440,10 +419,10 @@ CASE iState OF
     END_IF
 
 // ------------------------------------------------------------
-// 状态3: 运行 — MFF + ILC + ADRC 复合控制
-// 此状态下执行完整的6步控制流水线:
-//   1) 波形生成 → 2) 计算跟踪误差 → 3) MFF前馈
-//   → 4) ILC前馈 → 5) ADRC反馈 → 6) 三路叠加
+// 状态3: 运行 — PID 反馈控制 (ILC 仅诊断)
+// 此状态下执行控制流水线:
+//   1) 波形生成 → 2) ILC 修正目标 (诊断, 不汇总) → 3) 跟踪误差
+//   → 4) PID 反馈输出
 // ============================================================
 3:
     bRunning := TRUE;
@@ -729,148 +708,57 @@ GVL_PulsePressure.PP_Water_ControlOutput := rUTotal_W;
 GVL_PulsePressure.PP_Oil_ControlOutput := rUTotal_O;
 METHOD InitializeControllers
 
-// 各功能块复位说明:
-// fbWaveGen(bReset:=TRUE)  — 清零波形发生器内部相位、周期计数器，
-//                            确保第一脉冲从正确相位开始
-// fbMFF(bEnable:=FALSE)    — 禁用模型前馈并清零内部状态，
-//                            避免旧的前馈数据影响新测试
-// fbADRC(bReset:=TRUE)     — 复位自抗扰控制器，清零ESO状态变量z1/z2，
-//                            使ADRC从零误差开始调整
-// fbILC(bReset:=TRUE)      — 清零迭代学习存储的历史误差数据，
-//                            确保新一轮测试从第一个周期重新开始学习
-
 // 重置所有功能块
 fbWaveGen_W(bReset := TRUE);
-fbMFF_W(bEnable := FALSE);
-fbADRC_W(bReset := TRUE);
+fbPID_W(bReset := TRUE);
 fbILC_W(bReset := TRUE);
 
 fbWaveGen_O(bReset := TRUE);
-fbMFF_O(bEnable := FALSE);
-fbADRC_O(bReset := TRUE);
+fbPID_O(bReset := TRUE);
 fbILC_O(bReset := TRUE);
 
 // 重置峰值检测器
-// 将峰值压力归零，避免上一轮测试的峰值数据残留
 rPeakPressure_W := 0.0;
 rPeakPressure_O := 0.0;
 
-
-    // 初始化卸压斜坡值
-    // 将停止斜坡目标值设为当前实际压力，作为卸压起始点
-    // 这样进入状态3时斜坡会从当前压力开始以5MPa/s速率递减
-    rStopRampVal_W := GVL_PulsePressure.PP_Water_ActualPressure;
-    rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
+// 初始化卸压斜坡值（停止时从当前压力开始递减）
+rStopRampVal_W := GVL_PulsePressure.PP_Water_ActualPressure;
+rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
 END_METHOD
 
 METHOD RunWaterChannel
-VAR
-	rBetaE : REAL;
-	rCLeak : REAL;
-END_VAR
-// 读取系统参数 (带默认值保护)
-rBetaE := GVL_PulsePressure.PP_Sys_BetaE;
-IF rBetaE < 1.0E6 THEN rBetaE := 1.5E7; END_IF
-
-rCLeak := GVL_PulsePressure.PP_Sys_CLeak;
-IF rCLeak < 0.0 THEN rCLeak := 1.0E-12; END_IF
-
 // ---- 1. 波形生成 ----
-// 根据TestMode指定的波形类型(正弦/方波/三角/梯形/自定义)
-// 和压力范围(PMin~PMax)生成实时目标压力
-// PMin = rActualPMin（由上位机MinPressure参数决定）
-// PMax = TargetPressure
 fbWaveGen_W(
-    bEnable       := TRUE,
-    rPMin         := rActualPMin_W,
-    rPMax         := GVL_PulsePressure.PP_Water_TargetPressure,
-    rFrequency    := GVL_PulsePressure.PP_Water_Frequency,
-    iWaveType     := REAL_TO_INT(GVL_PulsePressure.PP_Water_WaveType),
-    rDutyCycle    := GVL_PulsePressure.PP_Water_DutyCycle / 100.0,
-    rRisePct      := GVL_PulsePressure.PP_Water_RisePct,
-    rHoldPct      := GVL_PulsePressure.PP_Water_HoldPct,
-    rFallPct      := GVL_PulsePressure.PP_Water_FallPct,
-    rDt           := rDt,
-    bReset        := FALSE,
-	nMffLeadSteps := 120
+    bEnable    := TRUE,
+    rPMin      := rActualPMin_W,
+    rPMax      := GVL_PulsePressure.PP_Water_TargetPressure,
+    rFrequency := GVL_PulsePressure.PP_Water_Frequency,
+    iWaveType  := REAL_TO_INT(GVL_PulsePressure.PP_Water_WaveType),
+    rDutyCycle := GVL_PulsePressure.PP_Water_DutyCycle / 100.0,
+    rRisePct   := GVL_PulsePressure.PP_Water_RisePct,
+    rHoldPct   := GVL_PulsePressure.PP_Water_HoldPct,
+    rFallPct   := GVL_PulsePressure.PP_Water_FallPct,
+    rDt        := rDt,
+    bReset     := FALSE
 );
-
-
 
 GVL_PulsePressure.PP_Water_SetpointPressure := fbWaveGen_W.rTarget;
 GVL_PulsePressure.PP_Water_WavePhase := fbWaveGen_W.rPhase * 360.0;
 GVL_PulsePressure.PP_Water_Frequency_FB := GVL_PulsePressure.PP_Water_Frequency;
 
-// 周期计数
+// 周期计数 + 峰值锁存
 IF fbWaveGen_W.bNewCycle THEN
     GVL_PulsePressure.PP_Water_CyclesDone := GVL_PulsePressure.PP_Water_CyclesDone + 1.0;
     GVL_PulsePressure.PP_TotalCyclesDone := GVL_PulsePressure.PP_TotalCyclesDone + 1.0;
-    // 更新峰值：每个脉冲周期结束时，将本周期内检测到的峰值压力锁存到GVL
     GVL_PulsePressure.PP_Water_PeakPressure := rPeakPressure_W;
     rPeakPressure_W := 0.0;
 END_IF
-
-// 峰值检测
 IF GVL_PulsePressure.PP_Water_ActualPressure > rPeakPressure_W THEN
     rPeakPressure_W := GVL_PulsePressure.PP_Water_ActualPressure;
 END_IF
 
-// ---- 2. 计算跟踪误差 ----
-// e = 目标压力 - 实际压力, 正值表示压力不足需增加
-rError_W := fbWaveGen_W.rTarget - GVL_PulsePressure.PP_Water_ActualPressure;
-GVL_PulsePressure.PP_Water_PressureError := rError_W;
-
-// ---- 3. 模型前馈 ----
-// MFF基于液压系统逆模型计算前馈控制量
-// 输入: 目标压力、前一周期目标压力、系统物理参数
-// 输出: u_mff — 约占所需总控制量的90%
-fbMFF_W(
-    bEnable        := TRUE,
-    rTargetMPa     := fbWaveGen_W.rTargetLead,
-    rTargetPrevMPa := fbWaveGen_W.rTargetLeadPrev,
-    rDt            := rDt,
-    rBetaE         := rBetaE,
-    rVTotal        := rVTotal_W,
-    rPs            := rPs_Pa,
-    rCLeak         := rCLeak,
-    rValveQnom     := GVL_PulsePressure.PP_Water_ValveQnom,
-    rValveDPnom    := GVL_PulsePressure.PP_Water_ValveDPnom,
-    rValveUmax     := GVL_PulsePressure.PP_Water_ValveUmax,
-    iValveDynMode  := REAL_TO_INT(GVL_PulsePressure.PP_Water_ValveDynMode),
-    rValveDynParam := GVL_PulsePressure.PP_Water_ValveDynParam
-);
-rUMff_W := fbMFF_W.rOutput;
-GVL_PulsePressure.PP_Water_MFF_Output := rUMff_W;
-
-// 回写诊断: 反推得到的Kv和τv
-GVL_PulsePressure.PP_Water_Kv := fbMFF_W.rKv_Calc;
-GVL_PulsePressure.PP_Water_TauValve := fbMFF_W.rTauValve_Calc;
-
-// ---- 4. ILC前馈 ----
-// ILC利用上一周期同相位点的误差修正本周期控制量
-// 每完成一个脉冲周期(bNewCycle)时更新学习存储
-// 使能: 仅当PP_Water_ILC_Enable=1时参与控制
-
-
-////四象限Alpha补偿算法+启动暖机
-
-fbILC_W(
-    bEnable         := (GVL_PulsePressure.PP_Water_ILC_Enable = 1.0),  // ILC总使能，上位机寄存器控制
-    rTargetRaw      := fbWaveGen_W.rTarget,                             // 原始目标压力 (MPa)，来自波形发生器
-    rActual         := GVL_PulsePressure.PP_Water_ActualPressure,       // 当前反馈压力 (MPa)
-    iPointIndex     := fbWaveGen_W.iPointIndex,                         // 当前周期内采样点序号 (0~iPointsPerCycle-1)
-    iPointsPerCycle := fbWaveGen_W.iPointsPerCycle,                     // 每周期总采样点数
-    bNewCycle       := fbWaveGen_W.bNewCycle,                           // 新周期脉冲信号（上升沿触发学习更新）
-    bReset          := FALSE,                                            // 复位：清零所有学习数据，恢复初始状态
-    iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Water_ILC_MaxIter), // 最大迭代次数，到达后锁定不再更新（0=不限制）
-    rLearningRate   := GVL_PulsePressure.PP_Water_ILC_LearningRate,     // 幅值 scale 学习率，建议 0.2~0.4
-    rAlphaLR        := 0.4,                                              // 波形形状（4象限α）学习率，建议 0.3~0.5
-    bAlphaEnable    := TRUE,                                             // α形状学习使能，FALSE时只学幅值不改波形形状
-    nWarmupCycles   := 5                                                 // 暖机周期数，前N周期透传不修正，防初始超压
-);
-
-//变形态
-(*
+// ---- 2. ILC 计算（仅诊断，不参与控制量汇总）----
+// ILC 内部维护学习存储；其虚拟目标供诊断观察，但 rError 仍按原始目标算。
 fbILC_W(
     bEnable         := (GVL_PulsePressure.PP_Water_ILC_Enable = 1.0),
     rTargetRaw      := fbWaveGen_W.rTarget,
@@ -881,122 +769,52 @@ fbILC_W(
     bReset          := FALSE,
     iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Water_ILC_MaxIter),
     rLearningRate   := GVL_PulsePressure.PP_Water_ILC_LearningRate,
-    rAlphaTarget    := 0.5,
-    rAlphaLR        := 0.4
+    rAlphaLR        := 0.4,
+    bAlphaEnable    := TRUE,
+    nWarmupCycles   := 5
 );
-*)
-
-(*
-fbILC_W(
-    bEnable         := (GVL_PulsePressure.PP_Water_ILC_Enable = 1.0),
-    rTargetRaw      := fbWaveGen_W.rTarget,
-    rActual         := GVL_PulsePressure.PP_Water_ActualPressure,
-    iPointIndex     := fbWaveGen_W.iPointIndex,
-    iPointsPerCycle := fbWaveGen_W.iPointsPerCycle,
-    bNewCycle       := fbWaveGen_W.bNewCycle,
-    bReset          := FALSE,
-    iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Water_ILC_MaxIter),
-    rLearningRate   := GVL_PulsePressure.PP_Water_ILC_LearningRate
-);
-*)
-
 rUIlc_W := fbILC_W.rOutput;
+rTargetCorrected_W := fbILC_W.rVirtualTarget;
 GVL_PulsePressure.PP_Water_ILC_Output := rUIlc_W;
 GVL_PulsePressure.PP_Water_ILC_Iteration := DINT_TO_REAL(fbILC_W.iIteration);
 
-
-// 更新GVL反馈
-(*
-IF fbWaveGen_W.rTarget >= 0.15 THEN
-   GVL_PulsePressure.PP_Water_SetpointPressure := 0.15 + (fbWaveGen_W.rTarget-0.15)*0.5  ;
-END_IF
-
-IF fbWaveGen_W.rTarget < 0.15 THEN
-   GVL_PulsePressure.PP_Water_SetpointPressure := 0.15 + (fbWaveGen_W.rTarget-0.15)*1.45  ;
-END_IF
-*)
-
-// 修正后的目标 = 原始目标 + ILC修正量
-rTargetCorrected_W := fbILC_W.rVirtualTarget;
-//GVL_PulsePressure.PP_Water_SetpointPressure := rTargetCorrected_W;
-
-// ---- 2. 计算跟踪误差 ----
-// e = 修正后目标 - 实际压力
-rError_W := rTargetCorrected_W - GVL_PulsePressure.PP_Water_ActualPressure;
-//rError_W := GVL_PulsePressure.PP_Water_SetpointPressure - GVL_PulsePressure.PP_Water_ActualPressure;
+// ---- 3. 跟踪误差 ----
+rError_W := fbWaveGen_W.rTarget - GVL_PulsePressure.PP_Water_ActualPressure;
 GVL_PulsePressure.PP_Water_PressureError := rError_W;
 
-// ---- 5. ADRC反馈 ----
-// ADRC(自抗扰控制)利用ESO扩张状态观测器实时估计系统总扰动
-// rZ2为ESO输出的扰动估计(单位: MPa/s)，用于前馈补偿
-// 与MFF+ILC叠加后可实时抑制非重复性扰动(如泄漏变化、负载波动)
-
-
-fbADRC_W(
-    bEnable   := TRUE,
-    rError    := rError_W,
-    rDt       := rDt,
-    rVTotal   := rVTotal_W,
-    bReset    := FALSE,
-    rBetaE    := rBetaE,
-    rPs       := rPs_Pa,
-    rValveQnom  := GVL_PulsePressure.PP_Water_ValveQnom,
-    rValveDPnom := GVL_PulsePressure.PP_Water_ValveDPnom,
-    rValveUmax  := GVL_PulsePressure.PP_Water_ValveUmax,
-	rPID_Kp := 0.3,
-	rPID_Ki := 0.0,
-	nCtrlMode :=1,
+// ---- 4. PID 反馈 ----
+fbPID_W(
+    bEnable := TRUE,
+    rError  := rError_W,
+    rDt     := rDt,
+    bReset  := FALSE,
+    rPID_Kp := GVL_PulsePressure.PP_Water_PID_Kp,
+    rPID_Ki := GVL_PulsePressure.PP_Water_PID_Ki
 );
-rUAdrc_W := fbADRC_W.rOutput;
+rUPid_W := fbPID_W.rOutput;
+GVL_PulsePressure.PP_Water_PID_Output := rUPid_W;
 
-// ADRC 诊断输出
-GVL_PulsePressure.PP_Water_ADRC_Output := rUAdrc_W;
-GVL_PulsePressure.PP_Water_ESO_Disturbance := fbADRC_W.rZ2;
-
-// ---- 6. 三环复合: u = u_mff + u_ilc + u_adrc ----
-// 总控制量为三路叠加:
-//   u_mff:  模型前馈，提供基准控制量(约90%)
-//   u_ilc:  迭代学习，修正重复性误差(约5-8%)
-//   u_adrc: 自抗扰控制，补偿非重复性扰动(约2-5%)
-//rUTotal_W := rUMff_W + rUIlc_W + rUAdrc_W;
-//rUTotal_W :=   GVL_PulsePressure.PP_Water_SetpointPressure - 0.11  + rUAdrc_W;
-rUTotal_W :=    rUAdrc_W;
-//rUTotal_W :=  rUAdrc_W;
+// ---- 5. 输出（仅 PID，不汇总 ILC）----
+rUTotal_W := rUPid_W;
 IF rUTotal_W > 10.0 THEN rUTotal_W := 10.0; END_IF
 IF rUTotal_W < -10.0 THEN rUTotal_W := -10.0; END_IF
-
-IF rUTotal_W > 0 THEN
-	PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_W*10 ;
-END_IF
-IF rUTotal_W < 0 THEN
-	PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_W*10    ;
-END_IF
+PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_W * 10;
 END_METHOD
 
 METHOD RunOilChannel
-VAR
-	rBetaE : REAL;
-	rCLeak : REAL;
-END_VAR
-rBetaE := GVL_PulsePressure.PP_Sys_BetaE;
-IF rBetaE < 1.0E6 THEN rBetaE := 1.4E9; END_IF
-
-rCLeak := GVL_PulsePressure.PP_Sys_CLeak;
-IF rCLeak < 0.0 THEN rCLeak := 1.0E-12; END_IF
-
 // ---- 1. 波形生成 ----
 fbWaveGen_O(
-    bEnable       := TRUE,
-    rPMin         := rActualPMin_O,
-    rPMax         := GVL_PulsePressure.PP_Oil_TargetPressure,
-    rFrequency    := GVL_PulsePressure.PP_Oil_Frequency,
-    iWaveType     := REAL_TO_INT(GVL_PulsePressure.PP_Oil_WaveType),
-    rDutyCycle    := GVL_PulsePressure.PP_Oil_DutyCycle / 100.0,
-    rRisePct      := GVL_PulsePressure.PP_Oil_RisePct,
-    rHoldPct      := GVL_PulsePressure.PP_Oil_HoldPct,
-    rFallPct      := GVL_PulsePressure.PP_Oil_FallPct,
-    rDt           := rDt,
-    bReset        := FALSE
+    bEnable    := TRUE,
+    rPMin      := rActualPMin_O,
+    rPMax      := GVL_PulsePressure.PP_Oil_TargetPressure,
+    rFrequency := GVL_PulsePressure.PP_Oil_Frequency,
+    iWaveType  := REAL_TO_INT(GVL_PulsePressure.PP_Oil_WaveType),
+    rDutyCycle := GVL_PulsePressure.PP_Oil_DutyCycle / 100.0,
+    rRisePct   := GVL_PulsePressure.PP_Oil_RisePct,
+    rHoldPct   := GVL_PulsePressure.PP_Oil_HoldPct,
+    rFallPct   := GVL_PulsePressure.PP_Oil_FallPct,
+    rDt        := rDt,
+    bReset     := FALSE
 );
 
 GVL_PulsePressure.PP_Oil_SetpointPressure := fbWaveGen_O.rTarget;
@@ -1009,105 +827,50 @@ IF fbWaveGen_O.bNewCycle THEN
     GVL_PulsePressure.PP_Oil_PeakPressure := rPeakPressure_O;
     rPeakPressure_O := 0.0;
 END_IF
-
 IF GVL_PulsePressure.PP_Oil_ActualPressure > rPeakPressure_O THEN
     rPeakPressure_O := GVL_PulsePressure.PP_Oil_ActualPressure;
 END_IF
 
-// ---- 2. 跟踪误差 ----
-rError_O := fbWaveGen_O.rTarget - GVL_PulsePressure.PP_Oil_ActualPressure;
-GVL_PulsePressure.PP_Oil_PressureError := rError_O;
-
-// ---- 3. 模型前馈 ----
-fbMFF_O(
-    bEnable        := TRUE,
-    rTargetMPa     := fbWaveGen_O.rTarget,
-    rTargetPrevMPa := fbWaveGen_O.rTargetPrev,
-    rDt            := rDt,
-    rBetaE         := rBetaE,
-    rVTotal        := rVTotal_O,
-    rPs            := rPs_Pa,
-    rCLeak         := rCLeak,
-    rValveQnom     := GVL_PulsePressure.PP_Oil_ValveQnom,
-    rValveDPnom    := GVL_PulsePressure.PP_Oil_ValveDPnom,
-    rValveUmax     := GVL_PulsePressure.PP_Oil_ValveUmax,
-    iValveDynMode  := REAL_TO_INT(GVL_PulsePressure.PP_Oil_ValveDynMode),
-    rValveDynParam := GVL_PulsePressure.PP_Oil_ValveDynParam
-);
-rUMff_O := fbMFF_O.rOutput;
-GVL_PulsePressure.PP_Oil_MFF_Output := rUMff_O;
-
-// 回写诊断: 反推得到的Kv和τv
-GVL_PulsePressure.PP_Oil_Kv := fbMFF_O.rKv_Calc;
-GVL_PulsePressure.PP_Oil_TauValve := fbMFF_O.rTauValve_Calc;
-
-// ---- 4. ILC前馈 ----
-////四象限Alpha补偿算法+启动暖机
-
+// ---- 2. ILC 计算（仅诊断，不参与控制量汇总）----
 fbILC_O(
-    bEnable         := (GVL_PulsePressure.PP_Oil_ILC_Enable = 1.0),  // ILC总使能，上位机寄存器控制
-    rTargetRaw      := fbWaveGen_O.rTarget,                             // 原始目标压力 (MPa)，来自波形发生器
-    rActual         := GVL_PulsePressure.PP_Oil_ActualPressure,       // 当前反馈压力 (MPa)
-    iPointIndex     := fbWaveGen_O.iPointIndex,                         // 当前周期内采样点序号 (0~iPointsPerCycle-1)
-    iPointsPerCycle := fbWaveGen_O.iPointsPerCycle,                     // 每周期总采样点数
-    bNewCycle       := fbWaveGen_O.bNewCycle,                           // 新周期脉冲信号（上升沿触发学习更新）
-    bReset          := FALSE,                                            // 复位：清零所有学习数据，恢复初始状态
-    iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Oil_ILC_MaxIter), // 最大迭代次数，到达后锁定不再更新（0=不限制）
-    rLearningRate   := GVL_PulsePressure.PP_Oil_ILC_LearningRate,     // 幅值 scale 学习率，建议 0.2~0.4
-    rAlphaLR        := 0.4,                                              // 波形形状（4象限α）学习率，建议 0.3~0.5
-    bAlphaEnable    := TRUE,                                             // α形状学习使能，FALSE时只学幅值不改波形形状
-    nWarmupCycles   := 5                                                 // 暖机周期数，前N周期透传不修正，防初始超压
+    bEnable         := (GVL_PulsePressure.PP_Oil_ILC_Enable = 1.0),
+    rTargetRaw      := fbWaveGen_O.rTarget,
+    rActual         := GVL_PulsePressure.PP_Oil_ActualPressure,
+    iPointIndex     := fbWaveGen_O.iPointIndex,
+    iPointsPerCycle := fbWaveGen_O.iPointsPerCycle,
+    bNewCycle       := fbWaveGen_O.bNewCycle,
+    bReset          := FALSE,
+    iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Oil_ILC_MaxIter),
+    rLearningRate   := GVL_PulsePressure.PP_Oil_ILC_LearningRate,
+    rAlphaLR        := 0.4,
+    bAlphaEnable    := TRUE,
+    nWarmupCycles   := 5
 );
-
 rUIlc_O := fbILC_O.rOutput;
+rTargetCorrected_O := fbILC_O.rVirtualTarget;
 GVL_PulsePressure.PP_Oil_ILC_Output := rUIlc_O;
 GVL_PulsePressure.PP_Oil_ILC_Iteration := DINT_TO_REAL(fbILC_O.iIteration);
 
-
-// 修正后的目标 = 原始目标 + ILC修正量
-rTargetCorrected_O := fbILC_O.rVirtualTarget;
-//GVL_PulsePressure.PP_Water_SetpointPressure := rTargetCorrected_W;
-
-// ---- 2. 计算跟踪误差 ----
-// e = 修正后目标 - 实际压力
-rError_O := rTargetCorrected_O - GVL_PulsePressure.PP_Oil_ActualPressure;
-//rError_W := GVL_PulsePressure.PP_Water_SetpointPressure - GVL_PulsePressure.PP_Water_ActualPressure;
+// ---- 3. 跟踪误差 ----
+rError_O := fbWaveGen_O.rTarget - GVL_PulsePressure.PP_Oil_ActualPressure;
 GVL_PulsePressure.PP_Oil_PressureError := rError_O;
 
-
-// ---- 5. ADRC反馈 ----
-fbADRC_O(
-    bEnable   := TRUE,
-    rError    := rError_O,
-    rDt       := rDt,
-    rVTotal   := rVTotal_O,
-    bReset    := FALSE,
-    rBetaE    := rBetaE,
-    rPs       := rPs_Pa,
-    rValveQnom  := GVL_PulsePressure.PP_Oil_ValveQnom,
-    rValveDPnom := GVL_PulsePressure.PP_Oil_ValveDPnom,
-    rValveUmax  := GVL_PulsePressure.PP_Oil_ValveUmax,
-	rPID_Kp := 0.3,
-	rPID_Ki := 0 ,
-	nCtrlMode :=1,
+// ---- 4. PID 反馈 ----
+fbPID_O(
+    bEnable := TRUE,
+    rError  := rError_O,
+    rDt     := rDt,
+    bReset  := FALSE,
+    rPID_Kp := GVL_PulsePressure.PP_Oil_PID_Kp,
+    rPID_Ki := GVL_PulsePressure.PP_Oil_PID_Ki
 );
-rUAdrc_O := fbADRC_O.rOutput;
+rUPid_O := fbPID_O.rOutput;
+GVL_PulsePressure.PP_Oil_PID_Output := rUPid_O;
 
-// ADRC 诊断输出
-GVL_PulsePressure.PP_Oil_ADRC_Output := rUAdrc_O;
-GVL_PulsePressure.PP_Oil_ESO_Disturbance := fbADRC_O.rZ2;
-
-// ---- 6. 三环复合 ----
-//rUTotal_O := rUMff_O + rUIlc_O + rUAdrc_O;
-rUTotal_O :=   rUAdrc_O;
+// ---- 5. 输出（仅 PID，不汇总 ILC）----
+rUTotal_O := rUPid_O;
 IF rUTotal_O > 10.0 THEN rUTotal_O := 10.0; END_IF
 IF rUTotal_O < -10.0 THEN rUTotal_O := -10.0; END_IF
-
-IF rUTotal_O > 0 THEN
-	PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O*10 ;
-END_IF
-IF rUTotal_O < 0 THEN
-	PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O*10 ;
-END_IF
+PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O * 10;
 END_METHOD
 END_PROGRAM

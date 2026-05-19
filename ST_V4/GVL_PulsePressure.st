@@ -19,15 +19,8 @@ VAR_GLOBAL
 	PP_Water_FallPct : REAL; // 梯形波下降段占比
 	PP_Water_HighLimit : REAL; // 水路高压保护限值(MPa)
 	PP_Water_TargetCycles : REAL; // 目标循环次数
-	PP_Water_VBase : REAL; // 水路基础容积(m³) — 管路+缸体
-	PP_Water_VSpecimen : REAL; // 水路被试件容积(m³)
-	PP_Water_Kv : REAL; // 水路阀流量增益(m³/s/V/√Pa) — 由样本参数反推(诊断回读)
-	PP_Water_TauValve : REAL; // 水路阀时间常数(s) — 由样本参数反推(诊断回读)
-	PP_Water_ValveQnom : REAL; // 水路阀额定流量(L/min)，查阀样本
-	PP_Water_ValveDPnom : REAL; // 水路阀额定压降(bar/每节流边)，查阀样本
-	PP_Water_ValveUmax : REAL; // 水路阀额定信号最大值(V)
-	PP_Water_ValveDynMode : REAL; // 水路阀动态参数模式: 0=频响频率(Hz), 1=阶跃响应时间(ms)
-	PP_Water_ValveDynParam : REAL; // 水路阀动态参数: 模式0为-3dB频率(Hz), 模式1为阶跃时间(ms)
+	PP_Water_PID_Kp : REAL; // 水路 PID 比例增益 (V/MPa)
+	PP_Water_PID_Ki : REAL; // 水路 PID 积分增益 (V/MPa/s)
 	PP_Water_ILC_Enable : REAL; // 水路迭代学习控制使能
 	PP_Water_ILC_MaxIter : REAL; // 水路ILC最大迭代次数
 	PP_Water_ILC_LearningRate : REAL; // 水路ILC学习率(0~1)，0=使用容积自适应默认值
@@ -48,15 +41,8 @@ VAR_GLOBAL
 	PP_Oil_FallPct : REAL; // 梯形波下降段占比
 	PP_Oil_HighLimit : REAL; // 油路高压保护限值(MPa)
 	PP_Oil_TargetCycles : REAL; // 目标循环次数
-	PP_Oil_VBase : REAL; // 油路基础容积(m³) — 管路+缸体
-	PP_Oil_VSpecimen : REAL; // 油路被试件容积(m³)
-	PP_Oil_Kv : REAL; // 油路阀流量增益(m³/s/V/√Pa) — 由样本参数反推(诊断回读)
-	PP_Oil_TauValve : REAL; // 油路阀时间常数(s) — 由样本参数反推(诊断回读)
-	PP_Oil_ValveQnom : REAL; // 油路阀额定流量(L/min)，查阀样本
-	PP_Oil_ValveDPnom : REAL; // 油路阀额定压降(bar/每节流边)，查阀样本
-	PP_Oil_ValveUmax : REAL; // 油路阀额定信号最大值(V)
-	PP_Oil_ValveDynMode : REAL; // 油路阀动态参数模式: 0=频响频率(Hz), 1=阶跃时间(ms)
-	PP_Oil_ValveDynParam : REAL; // 油路阀动态参数: 模式0为-3dB频率(Hz), 模式1为阶跃时间(ms)
+	PP_Oil_PID_Kp : REAL; // 油路 PID 比例增益 (V/MPa)
+	PP_Oil_PID_Ki : REAL; // 油路 PID 积分增益 (V/MPa/s)
 	PP_Oil_ILC_Enable : REAL; // 油路迭代学习控制使能
 	PP_Oil_ILC_MaxIter : REAL; // 油路ILC最大迭代次数
 	PP_Oil_ILC_LearningRate : REAL; // 油路ILC学习率(0~1)，0=使用容积自适应默认值
@@ -69,11 +55,8 @@ VAR_GLOBAL
 	PP_Oil_CycleReset : REAL; // 油路循环计数清零命令(上升沿有效)
 	PP_Hydro_HighLimit : REAL; // 液压站高压保护限值(MPa)
 	PP_Hydro_TempLimit : REAL; // 液压油温度保护限值(°C)
-	PP_Hydro_WorkingPressure : REAL; // 液压站工作压力设定值(MPa)，即供油压力Ps
 	PP_Hydro_PumpCmd : REAL; // 液压泵启停命令
 	PP_Hydro_MotorSpeed : REAL; // 液压泵电机转速设定值(rpm)
-	PP_Sys_BetaE : REAL; // 液压油体积弹性模量(Pa)，默认1.4e9
-	PP_Sys_CLeak : REAL; // 系统泄漏系数，默认1.0e-12
 	PP_IO_OutputBits : REAL; // 数字量输出控制
 	PP_IO_WaterCircuitSel : REAL; // 水路选通
 	PP_IO_OilCircuitSel : REAL; // 油路选通
@@ -90,33 +73,29 @@ VAR_GLOBAL
 	PP_Water_ActualPressure : REAL; // 水路实际压力(MPa)
 	PP_Water_SetpointPressure : REAL; // 水路当前给定压力(MPa)
 	PP_Water_PressureError : REAL; // 水路压力偏差(MPa)
-	PP_Water_ControlOutput : REAL; // 水路MFF+ILC+ADRC总控制输出(V)
+	PP_Water_ControlOutput : REAL; // 水路 PID 控制输出(V)
 	PP_Water_ValveCurrent : REAL; // 水路比例阀电流(mA)
 	PP_Water_CylinderPos : REAL; // 水路缸体位移(mm)
 	PP_Water_CyclesDone : REAL; // 水路已完成循环次数
 	PP_Water_Frequency_FB : REAL; // 水路实际频率回读(Hz)
 	PP_Water_WavePhase : REAL; // 水路波形相位角(°)
 	PP_Water_PeakPressure : REAL; // 水路本次脉冲峰值压力(MPa)
-	PP_Water_MFF_Output : REAL; // 水路模型前馈输出(V)
+	PP_Water_PID_Output : REAL; // 水路 PID 反馈输出(V)
 	PP_Water_ILC_Output : REAL; // 水路ILC学习输出(V)
 	PP_Water_ILC_Iteration : REAL; // 水路ILC当前迭代次数
-	PP_Water_ADRC_Output : REAL; // 水路ADRC反馈输出(V)
-	PP_Water_ESO_Disturbance : REAL; // 水路ESO扰动估计(MPa/s)
 	PP_Oil_ActualPressure : REAL; // 油路实际压力(MPa)
 	PP_Oil_SetpointPressure : REAL; // 油路当前给定压力(MPa)
 	PP_Oil_PressureError : REAL; // 油路压力偏差(MPa)
-	PP_Oil_ControlOutput : REAL; // 油路MFF+ILC+ADRC总控制输出(V)
+	PP_Oil_ControlOutput : REAL; // 油路 PID 控制输出(V)
 	PP_Oil_ValveCurrent : REAL; // 油路比例阀电流(mA)
 	PP_Oil_CylinderPos : REAL; // 油路缸体位移(mm)
 	PP_Oil_CyclesDone : REAL; // 油路已完成循环次数
 	PP_Oil_Frequency_FB : REAL; // 油路实际频率回读(Hz)
 	PP_Oil_WavePhase : REAL; // 油路波形相位角(°)
 	PP_Oil_PeakPressure : REAL; // 油路本次脉冲峰值压力(MPa)
-	PP_Oil_MFF_Output : REAL; // 油路模型前馈输出(V)
+	PP_Oil_PID_Output : REAL; // 油路 PID 反馈输出(V)
 	PP_Oil_ILC_Output : REAL; // 油路ILC学习输出(V)
 	PP_Oil_ILC_Iteration : REAL; // 油路ILC当前迭代次数
-	PP_Oil_ADRC_Output : REAL; // 油路ADRC反馈输出(V)
-	PP_Oil_ESO_Disturbance : REAL; // 油路ESO扰动估计(MPa/s)
 	PP_Hydro_Pressure : REAL; // 液压站系统压力(MPa)
 	PP_Hydro_Temperature : REAL; // 液压油温度(°C)
 	PP_Hydro_OilLevel : REAL; // 液位值(mm)

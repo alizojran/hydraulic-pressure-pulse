@@ -112,35 +112,17 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Water_TargetCycles := TwoWord_to_Float.Output;   // 38-39: 目标循环次数
 i := i + 2;
 
-// --- MFF 系统参数 ---
+// --- 水路 PID 参数（复用原 VBase/VSpecimen 槽位） ---
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_VBase := TwoWord_to_Float.Output;          // 40-41: 水路基础容积(m³)
+GVL_PulsePressure.PP_Water_PID_Kp := TwoWord_to_Float.Output;         // 40-41: 水路 PID Kp (V/MPa)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_VSpecimen := TwoWord_to_Float.Output;      // 42-43: 水路被试件容积(m³)
+GVL_PulsePressure.PP_Water_PID_Ki := TwoWord_to_Float.Output;         // 42-43: 水路 PID Ki (V/MPa/s)
 i := i + 2;
 
-// --- V2.1: 阀样本参数（替代原Kv/TauValve）---
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ValveQnom := TwoWord_to_Float.Output;      // 44-45: 阀额定流量(L/min)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ValveDPnom := TwoWord_to_Float.Output;     // 46-47: 阀额定压降(bar)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ValveUmax := TwoWord_to_Float.Output;      // 48-49: 阀额定电压(V)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ValveDynMode := TwoWord_to_Float.Output;   // 50-51: 阀动态模式(0=频响/1=阶跃)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ValveDynParam := TwoWord_to_Float.Output;  // 52-53: 阀动态参数(Hz或ms)
-i := i + 2;
+// 44-53: 保留 (原水路阀样本参数 V2.1 / MFF & ADRC 使用，已废弃)
+i := i + 10;
 
 // --- ILC 参数 ---
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
@@ -216,35 +198,17 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Oil_TargetCycles := TwoWord_to_Float.Output;     // 86-87: 目标循环次数
 i := i + 2;
 
-// --- MFF 系统参数 ---
+// --- 油路 PID 参数（复用原 VBase/VSpecimen 槽位） ---
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_VBase := TwoWord_to_Float.Output;            // 88-89: 油路基础容积(m³)
+GVL_PulsePressure.PP_Oil_PID_Kp := TwoWord_to_Float.Output;           // 88-89: 油路 PID Kp (V/MPa)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_VSpecimen := TwoWord_to_Float.Output;        // 90-91: 油路被试件容积(m³)
+GVL_PulsePressure.PP_Oil_PID_Ki := TwoWord_to_Float.Output;           // 90-91: 油路 PID Ki (V/MPa/s)
 i := i + 2;
 
-// --- V2.1: 阀样本参数（替代原Kv/TauValve）---
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_ValveQnom := TwoWord_to_Float.Output;        // 92-93: 阀额定流量(L/min)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_ValveDPnom := TwoWord_to_Float.Output;       // 94-95: 阀额定压降(bar)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_ValveUmax := TwoWord_to_Float.Output;        // 96-97: 阀额定电压(V)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_ValveDynMode := TwoWord_to_Float.Output;     // 98-99: 阀动态模式
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_ValveDynParam := TwoWord_to_Float.Output;    // 100-101: 阀动态参数
-i := i + 2;
+// 92-101: 保留 (原油路阀样本参数 V2.1 / MFF & ADRC 使用，已废弃)
+i := i + 10;
 
 // --- ILC 参数 ---
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
@@ -290,10 +254,7 @@ GVL_PulsePressure.PP_Hydro_TempLimit := TwoWord_to_Float.Output;      // 118-119
 // 数据流: PC写入 → 温度超限报警保护
 i := i + 2;
 
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Hydro_WorkingPressure := TwoWord_to_Float.Output; // 120-121: 液压站工作压力(Ps)
-// 数据流: PC写入 → PRG_PressureControl MFF前馈中供油压力Ps使用
-//         换算: rPs_Pa = PP_Hydro_WorkingPressure × 1E6
+// 120-121: 保留 (原 PP_Hydro_WorkingPressure，仅 MFF/ADRC 使用，已废弃)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
@@ -307,18 +268,9 @@ GVL_PulsePressure.PP_Hydro_MotorSpeed := TwoWord_to_Float.Output;     // 124-125
 i := i + 2;
 
 // ============================================================
-// MFF系统参数区（WORD地址 124–127）
-// 水路和油路共用的物理参数
+// 128-131: 保留 (原 PP_Sys_BetaE / PP_Sys_CLeak，仅 MFF/ADRC 使用，已废弃)
 // ============================================================
-i := 128;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Sys_BetaE := TwoWord_to_Float.Output;            // 128-129: 体积弹性模量(Pa)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Sys_CLeak := TwoWord_to_Float.Output;            // 130-131: 泄漏系数
-i := i + 2;
+i := 132;
 
 // ============================================================
 // IO 控制区（WORD地址 130–137）
