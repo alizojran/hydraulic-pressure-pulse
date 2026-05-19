@@ -774,12 +774,19 @@ fbILC_W(
     nWarmupCycles   := 5
 );
 rUIlc_W := fbILC_W.rOutput;
-rTargetCorrected_W := fbILC_W.rVirtualTarget;
 GVL_PulsePressure.PP_Water_ILC_Output := rUIlc_W;
 GVL_PulsePressure.PP_Water_ILC_Iteration := DINT_TO_REAL(fbILC_W.iIteration);
 
-// ---- 3. 跟踪误差 ----
-rError_W := fbWaveGen_W.rTarget - GVL_PulsePressure.PP_Water_ActualPressure;
+// 修正后的目标：ILC 使能时用其预畸变目标，否则透传原始波形目标
+// （FB_ILC 在 bEnable=FALSE 时 rVirtualTarget=0，必须回退）
+IF GVL_PulsePressure.PP_Water_ILC_Enable = 1.0 THEN
+    rTargetCorrected_W := fbILC_W.rVirtualTarget;
+ELSE
+    rTargetCorrected_W := fbWaveGen_W.rTarget;
+END_IF
+
+// ---- 3. 跟踪误差 (基于 ILC 修正后的目标) ----
+rError_W := rTargetCorrected_W - GVL_PulsePressure.PP_Water_ActualPressure;
 GVL_PulsePressure.PP_Water_PressureError := rError_W;
 
 // ---- 4. PID 反馈 ----
@@ -847,12 +854,18 @@ fbILC_O(
     nWarmupCycles   := 5
 );
 rUIlc_O := fbILC_O.rOutput;
-rTargetCorrected_O := fbILC_O.rVirtualTarget;
 GVL_PulsePressure.PP_Oil_ILC_Output := rUIlc_O;
 GVL_PulsePressure.PP_Oil_ILC_Iteration := DINT_TO_REAL(fbILC_O.iIteration);
 
-// ---- 3. 跟踪误差 ----
-rError_O := fbWaveGen_O.rTarget - GVL_PulsePressure.PP_Oil_ActualPressure;
+// 修正后的目标：ILC 使能时用其预畸变目标，否则透传原始波形目标
+IF GVL_PulsePressure.PP_Oil_ILC_Enable = 1.0 THEN
+    rTargetCorrected_O := fbILC_O.rVirtualTarget;
+ELSE
+    rTargetCorrected_O := fbWaveGen_O.rTarget;
+END_IF
+
+// ---- 3. 跟踪误差 (基于 ILC 修正后的目标) ----
+rError_O := rTargetCorrected_O - GVL_PulsePressure.PP_Oil_ActualPressure;
 GVL_PulsePressure.PP_Oil_PressureError := rError_O;
 
 // ---- 4. PID 反馈 ----
