@@ -96,6 +96,10 @@ END_IF
 Oil_Pressure_Filter(in:= PP_Oil_ActualPressure,t:= T#50MS);
 GVL_PulsePressure.PP_Oil_ActualPressure := Oil_Pressure_Filter.out;
 
+// 隔离缸位置回写到 GVL 供 PC 读取（WORD 30-31 / 60-61）
+GVL_PulsePressure.PP_Water_CylinderPos := PRG_HydraulicUnit_Control.Water_CylinderPos;
+GVL_PulsePressure.PP_Oil_CylinderPos := PRG_HydraulicUnit_Control.Oil_CylinderPos;
+
 
 //方向系数
 PWMotion.FPGAData.Axis1.OutputCoefficient := 1;
