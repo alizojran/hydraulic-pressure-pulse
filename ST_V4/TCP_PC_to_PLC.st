@@ -417,16 +417,8 @@ GVL_PulsePressure.PP_WaveUpload_Commit := TwoWord_to_Float.Output;       // 174-
 // 数据流: PC写入提交标志 → PRG_PressureControl上升沿检测触发加载
 
 
-// 176-199 原保留区，复用部分用于爆破续升速率
-i := 176;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_BurstRate2 := TwoWord_to_Float.Output;  // 176-177: 水路爆破续升速率(MPa/s)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_BurstRate2 := TwoWord_to_Float.Output;    // 178-179: 油路爆破续升速率(MPa/s)
-i := i + 2;
+// 176-199 保留区，部分用于循环计数清零
+i := 180;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
 GVL_PulsePressure.PP_Water_CycleReset := TwoWord_to_Float.Output;    // 180-181: 水路循环计数清零命令
@@ -435,7 +427,7 @@ i := i + 2;
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
 GVL_PulsePressure.PP_Oil_CycleReset := TwoWord_to_Float.Output;      // 182-183: 油路循环计数清零命令
 
-// 184-199 保留
+// 176-179 / 184-199 保留 (原 BurstRate2，V4 起续升沿用 RiseRate)
 
 
 

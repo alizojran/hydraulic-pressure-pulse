@@ -55,8 +55,7 @@ VAR
 	// 爆破: 水路
 	iBurstPhase_W : INT; // 0=升压 1=保压 2=续升 3=已爆破
 	rBurstSetpoint_W : REAL; // 给定压力(MPa)
-	rBurstRate1_W : REAL; // 初始升压速率(MPa/s)，取自 PP_Water_RiseRate
-	rBurstRate2_W : REAL; // 续升速率(MPa/s)
+	rBurstRate1_W : REAL; // 升压速率(MPa/s)，取自 PP_Water_RiseRate（升压+续升共用）
 	rBurstHoldTimer_W : REAL; // 保压计时器(s)
 	rBurstPeak_W : REAL; // 运行最大压力(MPa)
 	rBurstPrev_W : REAL; // 上周期压力(MPa)，用于跌速判定
@@ -65,7 +64,6 @@ VAR
 	iBurstPhase_O : INT;
 	rBurstSetpoint_O : REAL;
 	rBurstRate1_O : REAL;
-	rBurstRate2_O : REAL;
 	rBurstHoldTimer_O : REAL;
 	rBurstPeak_O : REAL;
 	rBurstPrev_O : REAL;
@@ -432,7 +430,7 @@ IF bBurstMode THEN
     // 爆破试验流程
     //   相位0(升压):  以 rate1=PP_*_RiseRate 从 0 升至 BurstPressure
     //   相位1(保压):  在 BurstPressure 上保持 HoldTime
-    //   相位2(续升):  以 rate2=PP_*_BurstRate2 (默认沿用 rate1) 继续升压
+    //   相位2(续升):  沿用 rate1=PP_*_RiseRate 继续升压
     //   相位3(已爆破): 已记录峰值，进入状态4停机
     // 爆破判据(仅在相位2评估):
     //   (a) 实际压力 < 峰值 × rBurstDropPct(0.7)
@@ -446,8 +444,6 @@ IF bBurstMode THEN
         IF rBurstRate1_W <= 0.0 THEN
             rBurstRate1_W := 0.01;  // 安全兜底 0.01 MPa/s
         END_IF
-        rBurstRate2_W := GVL_PulsePressure.PP_Water_BurstRate2;
-        IF rBurstRate2_W <= 0.0 THEN rBurstRate2_W := rBurstRate1_W; END_IF
 
         // 给定值递推
         CASE iBurstPhase_W OF
@@ -464,7 +460,7 @@ IF bBurstMode THEN
                     iBurstPhase_W := 2;
                 END_IF
             2:
-                rBurstSetpoint_W := rBurstSetpoint_W + rBurstRate2_W * rDt;
+                rBurstSetpoint_W := rBurstSetpoint_W + rBurstRate1_W * rDt;
                 // 安全上限：给定值到 BurstMaxLimit 仍未检测到爆破 → 停机
                 IF GVL_PulsePressure.PP_Water_BurstMaxLimit > 0.0
                    AND rBurstSetpoint_W >= GVL_PulsePressure.PP_Water_BurstMaxLimit THEN
@@ -518,8 +514,6 @@ IF bBurstMode THEN
         IF rBurstRate1_O <= 0.0 THEN
             rBurstRate1_O := 0.01;
         END_IF
-        rBurstRate2_O := GVL_PulsePressure.PP_Oil_BurstRate2;
-        IF rBurstRate2_O <= 0.0 THEN rBurstRate2_O := rBurstRate1_O; END_IF
 
         CASE iBurstPhase_O OF
             0:
@@ -535,7 +529,7 @@ IF bBurstMode THEN
                     iBurstPhase_O := 2;
                 END_IF
             2:
-                rBurstSetpoint_O := rBurstSetpoint_O + rBurstRate2_O * rDt;
+                rBurstSetpoint_O := rBurstSetpoint_O + rBurstRate1_O * rDt;
                 IF GVL_PulsePressure.PP_Oil_BurstMaxLimit > 0.0
                    AND rBurstSetpoint_O >= GVL_PulsePressure.PP_Oil_BurstMaxLimit THEN
                     rBurstSetpoint_O := GVL_PulsePressure.PP_Oil_BurstMaxLimit;

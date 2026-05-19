@@ -27,7 +27,6 @@ VAR_GLOBAL
 	PP_Water_BurstPressure : REAL; // 水路爆破模式目标压力(MPa)，保压平台
 	PP_Water_RiseRate : REAL; // 水路爆破升压速率(MPa/s)
 	PP_Water_HoldTime : REAL; // 水路爆破测试保压时间(s)
-	PP_Water_BurstRate2 : REAL; // 水路爆破续升速率(MPa/s)，保压后继续升压用
 	PP_Water_BurstMaxLimit : REAL; // 水路爆破最大安全压力(MPa)；给定值到此停机，避免无限升压
 	PP_Water_BurstResult : REAL; // 水路爆破压力记录(MPa)，0 表示尚未爆破
 	PP_Water_BurstPhase : REAL; // 水路爆破相位 0=升压 1=保压 2=续升 3=已爆破 4=到上限未爆破
@@ -50,7 +49,6 @@ VAR_GLOBAL
 	PP_Oil_BurstPressure : REAL; // 油路爆破模式目标压力(MPa)，保压平台
 	PP_Oil_RiseRate : REAL; // 油路爆破升压速率(MPa/s)
 	PP_Oil_HoldTime : REAL; // 油路爆破测试保压时间(s)
-	PP_Oil_BurstRate2 : REAL; // 油路爆破续升速率(MPa/s)，保压后继续升压用
 	PP_Oil_BurstMaxLimit : REAL; // 油路爆破最大安全压力(MPa)；给定值到此停机，避免无限升压
 	PP_Oil_BurstResult : REAL; // 油路爆破压力记录(MPa)，0 表示尚未爆破
 	PP_Oil_BurstPhase : REAL; // 油路爆破相位 0=升压 1=保压 2=续升 3=已爆破 4=到上限未爆破
