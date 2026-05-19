@@ -73,7 +73,6 @@ VAR
 	// 爆破检测参数
 	rBurstDropPct : REAL := 0.7;   // 跌至峰值×0.7以下判定爆破
 	rBurstDropRateLim : REAL := -20.0; // 跌速门限(MPa/s)，低于此值判定爆破
-	rBurstMinPeak : REAL := 1.0;   // 峰值小于此值不参与爆破判定，避免低压噪声误判
 END_VAR
 {*
 25.01为水侧产品端压力
@@ -438,7 +437,6 @@ IF bBurstMode THEN
     // 爆破判据(仅在相位2评估):
     //   (a) 实际压力 < 峰值 × rBurstDropPct(0.7)
     //   (b) 跌速 < rBurstDropRateLim(-20 MPa/s)
-    //   且峰值 > rBurstMinPeak(1 MPa) 以滤掉低压噪声
     // ================================================================
 
     // ==================== 水路爆破 ====================
@@ -488,7 +486,7 @@ IF bBurstMode THEN
         rBurstPrev_W := GVL_PulsePressure.PP_Water_ActualPressure;
 
         // 爆破检测(仅相位2)
-        IF iBurstPhase_W = 2 AND rBurstPeak_W > rBurstMinPeak THEN
+        IF iBurstPhase_W = 2 THEN
             IF (GVL_PulsePressure.PP_Water_ActualPressure < rBurstPeak_W * rBurstDropPct)
                OR (rBurstDropRate_W < rBurstDropRateLim) THEN
                 GVL_PulsePressure.PP_Water_BurstResult := rBurstPeak_W;
@@ -556,7 +554,7 @@ IF bBurstMode THEN
         rBurstDropRate_O := (GVL_PulsePressure.PP_Oil_ActualPressure - rBurstPrev_O) / rDt;
         rBurstPrev_O := GVL_PulsePressure.PP_Oil_ActualPressure;
 
-        IF iBurstPhase_O = 2 AND rBurstPeak_O > rBurstMinPeak THEN
+        IF iBurstPhase_O = 2 THEN
             IF (GVL_PulsePressure.PP_Oil_ActualPressure < rBurstPeak_O * rBurstDropPct)
                OR (rBurstDropRate_O < rBurstDropRateLim) THEN
                 GVL_PulsePressure.PP_Oil_BurstResult := rBurstPeak_O;
