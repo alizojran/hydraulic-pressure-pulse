@@ -426,8 +426,16 @@ i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
 GVL_PulsePressure.PP_Oil_BurstRate2 := TwoWord_to_Float.Output;    // 178-179: 油路爆破续升速率(MPa/s)
+i := i + 2;
 
-// 180-199 保留
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Water_BurstMaxLimit := TwoWord_to_Float.Output; // 180-181: 水路爆破最大安全压力(MPa)
+i := i + 2;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_BurstMaxLimit := TwoWord_to_Float.Output;   // 182-183: 油路爆破最大安全压力(MPa)
+
+// 184-199 保留
 
 
 

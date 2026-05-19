@@ -468,6 +468,15 @@ IF bBurstMode THEN
                 END_IF
             2:
                 rBurstSetpoint_W := rBurstSetpoint_W + rBurstRate2_W * rDt;
+                // 安全上限：给定值到 BurstMaxLimit 仍未检测到爆破 → 停机
+                IF GVL_PulsePressure.PP_Water_BurstMaxLimit > 0.0
+                   AND rBurstSetpoint_W >= GVL_PulsePressure.PP_Water_BurstMaxLimit THEN
+                    rBurstSetpoint_W := GVL_PulsePressure.PP_Water_BurstMaxLimit;
+                    iBurstPhase_W := 4;  // 到上限未爆破
+                    rStopRampVal_W := GVL_PulsePressure.PP_Water_ActualPressure;
+                    rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
+                    iState := 4;
+                END_IF
         END_CASE
 
         // 跟峰
@@ -531,6 +540,14 @@ IF bBurstMode THEN
                 END_IF
             2:
                 rBurstSetpoint_O := rBurstSetpoint_O + rBurstRate2_O * rDt;
+                IF GVL_PulsePressure.PP_Oil_BurstMaxLimit > 0.0
+                   AND rBurstSetpoint_O >= GVL_PulsePressure.PP_Oil_BurstMaxLimit THEN
+                    rBurstSetpoint_O := GVL_PulsePressure.PP_Oil_BurstMaxLimit;
+                    iBurstPhase_O := 4;
+                    rStopRampVal_W := GVL_PulsePressure.PP_Water_ActualPressure;
+                    rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
+                    iState := 4;
+                END_IF
         END_CASE
 
         IF GVL_PulsePressure.PP_Oil_ActualPressure > rBurstPeak_O THEN
