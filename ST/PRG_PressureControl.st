@@ -104,7 +104,7 @@ IF PP_TestMode=1 THEN
 ELSIF PP_TestMode=3 THEN
    PP_Oil_ActualPressure:=PRG_DeviceControl.toPC_Pressure_27_01; //高压
 END_IF
-Oil_Pressure_Filter(in:= PP_Oil_ActualPressure,t:= T#100MS);
+Oil_Pressure_Filter(in:= PP_Oil_ActualPressure,t:= T#50MS);
 GVL_PulsePressure.PP_Oil_ActualPressure := Oil_Pressure_Filter.out;
 
 
