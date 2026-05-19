@@ -734,4 +734,28 @@ Float_to_TwoWord(input := GVL_GPIO.CT_3168_AI_3);  //
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 234-235: 换热泵2_运行频率反馈_(传送AD通道采集值)
 
+// ============================================================
+// 爆破测试结果回传区（WORD地址 236-243）
+// 数据流: PRG_PressureControl 爆破状态机写入 → PC 读取展示
+// ============================================================
+j := j + 2;
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_BurstResult);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 236-237: 水路爆破压力记录(MPa)
+
+j := j + 2;
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_BurstPhase);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 238-239: 水路爆破相位 0=升压 1=保压 2=续升 3=已爆破
+
+j := j + 2;
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_BurstResult);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 240-241: 油路爆破压力记录(MPa)
+
+j := j + 2;
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_BurstPhase);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 242-243: 油路爆破相位 0=升压 1=保压 2=续升 3=已爆破
+
 END_PROGRAM

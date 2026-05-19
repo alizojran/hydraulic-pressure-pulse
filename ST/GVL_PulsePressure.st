@@ -31,9 +31,12 @@ VAR_GLOBAL
 	PP_Water_ILC_Enable : REAL; // 水路迭代学习控制使能
 	PP_Water_ILC_MaxIter : REAL; // 水路ILC最大迭代次数
 	PP_Water_ILC_LearningRate : REAL; // 水路ILC学习率(0~1)，0=使用容积自适应默认值
-	PP_Water_BurstPressure : REAL; // 水路爆破模式目标压力(MPa)
-	PP_Water_RiseTime : REAL; // 水路爆破上升时间(s)
+	PP_Water_BurstPressure : REAL; // 水路爆破模式目标压力(MPa)，保压平台
+	PP_Water_RiseTime : REAL; // 水路爆破上升时间(s)，0→BurstPressure 的耗时
 	PP_Water_HoldTime : REAL; // 水路爆破测试保压时间(s)
+	PP_Water_BurstRate2 : REAL; // 水路爆破续升速率(MPa/s)，保压后继续升压用
+	PP_Water_BurstResult : REAL; // 水路爆破压力记录(MPa)，0 表示尚未爆破
+	PP_Water_BurstPhase : REAL; // 水路爆破相位 0=升压 1=保压 2=续升 3=已爆破
 	PP_Water_CycleReset : REAL; // 水路循环计数清零命令(上升沿有效)
 	PP_Oil_TargetPressure : REAL; // 油路目标峰值压力(MPa) = PMax
 	PP_Oil_MinPressure : REAL; // 油路最低压力(MPa) = PMin
@@ -57,9 +60,12 @@ VAR_GLOBAL
 	PP_Oil_ILC_Enable : REAL; // 油路迭代学习控制使能
 	PP_Oil_ILC_MaxIter : REAL; // 油路ILC最大迭代次数
 	PP_Oil_ILC_LearningRate : REAL; // 油路ILC学习率(0~1)，0=使用容积自适应默认值
-	PP_Oil_BurstPressure : REAL; // 油路爆破模式目标压力(MPa)
-	PP_Oil_RiseTime : REAL; // 油路爆破上升时间(s)
+	PP_Oil_BurstPressure : REAL; // 油路爆破模式目标压力(MPa)，保压平台
+	PP_Oil_RiseTime : REAL; // 油路爆破上升时间(s)，0→BurstPressure 的耗时
 	PP_Oil_HoldTime : REAL; // 油路爆破测试保压时间(s)
+	PP_Oil_BurstRate2 : REAL; // 油路爆破续升速率(MPa/s)，保压后继续升压用
+	PP_Oil_BurstResult : REAL; // 油路爆破压力记录(MPa)，0 表示尚未爆破
+	PP_Oil_BurstPhase : REAL; // 油路爆破相位 0=升压 1=保压 2=续升 3=已爆破
 	PP_Oil_CycleReset : REAL; // 油路循环计数清零命令(上升沿有效)
 	PP_Hydro_HighLimit : REAL; // 液压站高压保护限值(MPa)
 	PP_Hydro_TempLimit : REAL; // 液压油温度保护限值(°C)

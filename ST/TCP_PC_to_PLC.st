@@ -466,7 +466,17 @@ GVL_PulsePressure.PP_WaveUpload_Commit := TwoWord_to_Float.Output;       // 174-
 // 数据流: PC写入提交标志 → PRG_PressureControl上升沿检测触发加载
 
 
-//176-199，保留
+// 176-199 原保留区，复用部分用于爆破续升速率
+i := 176;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Water_BurstRate2 := TwoWord_to_Float.Output;  // 176-177: 水路爆破续升速率(MPa/s)
+i := i + 2;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_BurstRate2 := TwoWord_to_Float.Output;    // 178-179: 油路爆破续升速率(MPa/s)
+
+// 180-199 保留
 
 
 

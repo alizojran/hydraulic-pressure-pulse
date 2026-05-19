@@ -58,6 +58,29 @@ VAR
 	PP_Water_ActualPressure : REAL;
 	Oil_Pressure_Filter : PWControl.LowPassFilter_R;
 	PP_Oil_ActualPressure : REAL;
+	bBurstMode : BOOL; // 当前周期是否为爆破模式 (TestMode=2 或 3)
+	// 爆破: 水路
+	iBurstPhase_W : INT; // 0=升压 1=保压 2=续升 3=已爆破
+	rBurstSetpoint_W : REAL; // 给定压力(MPa)
+	rBurstRate1_W : REAL; // 初始升压速率(MPa/s) = BurstPressure / RiseTime
+	rBurstRate2_W : REAL; // 续升速率(MPa/s)
+	rBurstHoldTimer_W : REAL; // 保压计时器(s)
+	rBurstPeak_W : REAL; // 运行最大压力(MPa)
+	rBurstPrev_W : REAL; // 上周期压力(MPa)，用于跌速判定
+	rBurstDropRate_W : REAL; // 当前压力跌速(MPa/s)
+	// 爆破: 油路
+	iBurstPhase_O : INT;
+	rBurstSetpoint_O : REAL;
+	rBurstRate1_O : REAL;
+	rBurstRate2_O : REAL;
+	rBurstHoldTimer_O : REAL;
+	rBurstPeak_O : REAL;
+	rBurstPrev_O : REAL;
+	rBurstDropRate_O : REAL;
+	// 爆破检测参数（如需上位机可调，后续提到 GVL）
+	rBurstDropPct : REAL := 0.7;   // 跌至峰值×0.7以下判定爆破
+	rBurstDropRateLim : REAL := -20.0; // 跌速门限(MPa/s)，低于此值判定爆破
+	rBurstMinPeak : REAL := 1.0;   // 峰值小于此值不参与爆破判定，避免低压噪声误判
 END_VAR
 
 {*
@@ -161,6 +184,26 @@ IF bCmdChanged THEN
         2: // 运行（自动序列：油缸检查→预加压→运行）
 		    rFlushTimer := 0.0;
             InitializeControllers();
+            // 爆破模式：清零结果与相位，重新开始一次爆破试验
+            IF GVL_PulsePressure.PP_TestMode = 2.0 THEN
+                iBurstPhase_W := 0;
+                rBurstSetpoint_W := 0.0;
+                rBurstHoldTimer_W := 0.0;
+                rBurstPeak_W := 0.0;
+                rBurstPrev_W := GVL_PulsePressure.PP_Water_ActualPressure;
+                rBurstDropRate_W := 0.0;
+                GVL_PulsePressure.PP_Water_BurstResult := 0.0;
+                GVL_PulsePressure.PP_Water_BurstPhase := 0.0;
+            ELSIF GVL_PulsePressure.PP_TestMode = 3.0 THEN
+                iBurstPhase_O := 0;
+                rBurstSetpoint_O := 0.0;
+                rBurstHoldTimer_O := 0.0;
+                rBurstPeak_O := 0.0;
+                rBurstPrev_O := GVL_PulsePressure.PP_Oil_ActualPressure;
+                rBurstDropRate_O := 0.0;
+                GVL_PulsePressure.PP_Oil_BurstResult := 0.0;
+                GVL_PulsePressure.PP_Oil_BurstPhase := 0.0;
+            END_IF
             iState := 2;  // 先进入预加压，内部自动推进到运行
         3: // 停止
             rStopRampVal_W := GVL_PulsePressure.PP_Water_ActualPressure;
@@ -182,6 +225,7 @@ END_IF
 // ============================================================
 bWaterActive := (GVL_PulsePressure.PP_TestMode = 0.0 OR GVL_PulsePressure.PP_TestMode = 2.0);
 bOilActive   := (GVL_PulsePressure.PP_TestMode = 1.0 OR GVL_PulsePressure.PP_TestMode = 3.0);
+bBurstMode   := (GVL_PulsePressure.PP_TestMode = 2.0 OR GVL_PulsePressure.PP_TestMode = 3.0);
 
 //1.水侧测试：开启10.02、10.04，关闭10.01、10.03
 IF bWaterActive=TRUE THEN
@@ -315,6 +359,12 @@ CASE iState OF
     IF rCylinderPos > 30.0 THEN
         // 油缸未到位，等待，不输出压力控制
         PWMOTION.FPGAData.Axis1.Output_ManualSet := -5;
+    ELSIF bBurstMode THEN
+        // 爆破模式：不做预加压，从 0 MPa 起斜坡，直接进入运行
+        rUTotal_W := 0.0;
+        rUTotal_O := 0.0;
+        PWMOTION.FPGAData.Axis1.Output_ManualSet := 0;
+        iState := 3;
     ELSE
         // 油缸到位，执行预加压
         // 水路预加压
@@ -374,6 +424,144 @@ CASE iState OF
     bRunning := TRUE;
     GVL_PulsePressure.PP_SysState := 3.0;  // 运行
 
+IF bBurstMode THEN
+    // ================================================================
+    // 爆破试验流程
+    //   相位0(升压):  以 rate1=BurstPressure/RiseTime 从 0 升至 BurstPressure
+    //   相位1(保压):  在 BurstPressure 上保持 HoldTime
+    //   相位2(续升):  以 rate2=PP_*_BurstRate2 (默认沿用 rate1) 继续升压
+    //   相位3(已爆破): 已记录峰值，进入状态4停机
+    // 爆破判据(仅在相位2评估):
+    //   (a) 实际压力 < 峰值 × rBurstDropPct(0.7)
+    //   (b) 跌速 < rBurstDropRateLim(-20 MPa/s)
+    //   且峰值 > rBurstMinPeak(1 MPa) 以滤掉低压噪声
+    // ================================================================
+
+    // ==================== 水路爆破 ====================
+    IF bWaterActive THEN
+        // 速率参数(每周期重算，允许在线调整)
+        IF GVL_PulsePressure.PP_Water_RiseTime > 0.001 THEN
+            rBurstRate1_W := GVL_PulsePressure.PP_Water_BurstPressure / GVL_PulsePressure.PP_Water_RiseTime;
+        ELSE
+            rBurstRate1_W := 0.01;  // 安全兜底 0.01 MPa/s
+        END_IF
+        rBurstRate2_W := GVL_PulsePressure.PP_Water_BurstRate2;
+        IF rBurstRate2_W <= 0.0 THEN rBurstRate2_W := rBurstRate1_W; END_IF
+
+        // 给定值递推
+        CASE iBurstPhase_W OF
+            0:
+                rBurstSetpoint_W := rBurstSetpoint_W + rBurstRate1_W * rDt;
+                IF rBurstSetpoint_W >= GVL_PulsePressure.PP_Water_BurstPressure THEN
+                    rBurstSetpoint_W := GVL_PulsePressure.PP_Water_BurstPressure;
+                    rBurstHoldTimer_W := 0.0;
+                    iBurstPhase_W := 1;
+                END_IF
+            1:
+                rBurstHoldTimer_W := rBurstHoldTimer_W + rDt;
+                IF rBurstHoldTimer_W >= GVL_PulsePressure.PP_Water_HoldTime THEN
+                    iBurstPhase_W := 2;
+                END_IF
+            2:
+                rBurstSetpoint_W := rBurstSetpoint_W + rBurstRate2_W * rDt;
+        END_CASE
+
+        // 跟峰
+        IF GVL_PulsePressure.PP_Water_ActualPressure > rBurstPeak_W THEN
+            rBurstPeak_W := GVL_PulsePressure.PP_Water_ActualPressure;
+        END_IF
+        // 跌速估计
+        rBurstDropRate_W := (GVL_PulsePressure.PP_Water_ActualPressure - rBurstPrev_W) / rDt;
+        rBurstPrev_W := GVL_PulsePressure.PP_Water_ActualPressure;
+
+        // 爆破检测(仅相位2)
+        IF iBurstPhase_W = 2 AND rBurstPeak_W > rBurstMinPeak THEN
+            IF (GVL_PulsePressure.PP_Water_ActualPressure < rBurstPeak_W * rBurstDropPct)
+               OR (rBurstDropRate_W < rBurstDropRateLim) THEN
+                GVL_PulsePressure.PP_Water_BurstResult := rBurstPeak_W;
+                iBurstPhase_W := 3;
+                rStopRampVal_W := GVL_PulsePressure.PP_Water_ActualPressure;
+                rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
+                iState := 4;
+            END_IF
+        END_IF
+
+        // P 跟踪给定值
+        rPrePressErr_W := rBurstSetpoint_W - GVL_PulsePressure.PP_Water_ActualPressure;
+        rUTotal_W := rPrePressKp * rPrePressErr_W;
+        IF rUTotal_W > 10.0 THEN rUTotal_W := 10.0; END_IF
+        IF rUTotal_W < -10.0 THEN rUTotal_W := -10.0; END_IF
+        PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_W * 10;
+
+        // 回写诊断
+        GVL_PulsePressure.PP_Water_SetpointPressure := rBurstSetpoint_W;
+        GVL_PulsePressure.PP_Water_PressureError := rPrePressErr_W;
+        GVL_PulsePressure.PP_Water_PeakPressure := rBurstPeak_W;
+        GVL_PulsePressure.PP_Water_BurstPhase := INT_TO_REAL(iBurstPhase_W);
+    ELSE
+        rUTotal_W := 0.0;
+    END_IF
+
+    // ==================== 油路爆破 ====================
+    IF bOilActive THEN
+        IF GVL_PulsePressure.PP_Oil_RiseTime > 0.001 THEN
+            rBurstRate1_O := GVL_PulsePressure.PP_Oil_BurstPressure / GVL_PulsePressure.PP_Oil_RiseTime;
+        ELSE
+            rBurstRate1_O := 0.01;
+        END_IF
+        rBurstRate2_O := GVL_PulsePressure.PP_Oil_BurstRate2;
+        IF rBurstRate2_O <= 0.0 THEN rBurstRate2_O := rBurstRate1_O; END_IF
+
+        CASE iBurstPhase_O OF
+            0:
+                rBurstSetpoint_O := rBurstSetpoint_O + rBurstRate1_O * rDt;
+                IF rBurstSetpoint_O >= GVL_PulsePressure.PP_Oil_BurstPressure THEN
+                    rBurstSetpoint_O := GVL_PulsePressure.PP_Oil_BurstPressure;
+                    rBurstHoldTimer_O := 0.0;
+                    iBurstPhase_O := 1;
+                END_IF
+            1:
+                rBurstHoldTimer_O := rBurstHoldTimer_O + rDt;
+                IF rBurstHoldTimer_O >= GVL_PulsePressure.PP_Oil_HoldTime THEN
+                    iBurstPhase_O := 2;
+                END_IF
+            2:
+                rBurstSetpoint_O := rBurstSetpoint_O + rBurstRate2_O * rDt;
+        END_CASE
+
+        IF GVL_PulsePressure.PP_Oil_ActualPressure > rBurstPeak_O THEN
+            rBurstPeak_O := GVL_PulsePressure.PP_Oil_ActualPressure;
+        END_IF
+        rBurstDropRate_O := (GVL_PulsePressure.PP_Oil_ActualPressure - rBurstPrev_O) / rDt;
+        rBurstPrev_O := GVL_PulsePressure.PP_Oil_ActualPressure;
+
+        IF iBurstPhase_O = 2 AND rBurstPeak_O > rBurstMinPeak THEN
+            IF (GVL_PulsePressure.PP_Oil_ActualPressure < rBurstPeak_O * rBurstDropPct)
+               OR (rBurstDropRate_O < rBurstDropRateLim) THEN
+                GVL_PulsePressure.PP_Oil_BurstResult := rBurstPeak_O;
+                iBurstPhase_O := 3;
+                rStopRampVal_W := GVL_PulsePressure.PP_Water_ActualPressure;
+                rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
+                iState := 4;
+            END_IF
+        END_IF
+
+        rPrePressErr_O := rBurstSetpoint_O - GVL_PulsePressure.PP_Oil_ActualPressure;
+        rUTotal_O := rPrePressKp * rPrePressErr_O;
+        IF rUTotal_O > 10.0 THEN rUTotal_O := 10.0; END_IF
+        IF rUTotal_O < -10.0 THEN rUTotal_O := -10.0; END_IF
+        PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O * 10;
+
+        GVL_PulsePressure.PP_Oil_SetpointPressure := rBurstSetpoint_O;
+        GVL_PulsePressure.PP_Oil_PressureError := rPrePressErr_O;
+        GVL_PulsePressure.PP_Oil_PeakPressure := rBurstPeak_O;
+        GVL_PulsePressure.PP_Oil_BurstPhase := INT_TO_REAL(iBurstPhase_O);
+    ELSE
+        rUTotal_O := 0.0;
+    END_IF
+
+ELSE
+    // ==================== 脉冲模式（原逻辑） ====================
     // ==================== 水路控制 ====================
     IF bWaterActive THEN
         RunWaterChannel();
@@ -388,7 +576,7 @@ CASE iState OF
         rUTotal_O := 0.0;
     END_IF
 
-    // 检查目标循环数（到达后自动停止）
+    // 检查目标循环数（到达后自动停止；爆破模式不适用）
     IF bWaterActive AND GVL_PulsePressure.PP_Water_TargetCycles > 0.0 THEN
         IF GVL_PulsePressure.PP_Water_CyclesDone >= GVL_PulsePressure.PP_Water_TargetCycles THEN
             rStopRampVal_W := GVL_PulsePressure.PP_Water_ActualPressure;
@@ -403,6 +591,7 @@ CASE iState OF
             iState := 4;
         END_IF
     END_IF
+END_IF
 
 // ------------------------------------------------------------
 // 状态4: 停止中 — 缓慢卸压
