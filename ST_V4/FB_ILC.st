@@ -10,6 +10,7 @@ VAR_INPUT
 	iMaxIterations : INT;
 	rLearningRate : REAL := 0.3; // 端点学习率
 	rAlphaLR : REAL := 0.2; // α 学习率（正弦/三角 8 段、梯形/矩形 6 段）
+	rGroupW : REAL := 0.5; // 12 段组级修正权重（解决 bin 钳位时溢出不转移问题）；0=禁用
 	bAlphaEnable : BOOL := TRUE; // α 自学习使能（正弦/三角/梯形/矩形）
 	bPlatCorrEnable : BOOL := TRUE; // 平台 2 段幅值修正使能（仅梯形/矩形生效）
 	nWarmupCycles : INT := 3; // 暖机周期数：前N个周期透传不修正，同时完成波形类型检测
@@ -88,6 +89,16 @@ VAR
 	rFbPos : REAL;
 	iBinK : INT;
 	rAlphaSum : REAL;
+	rRiseTgtSum : REAL; // 12 段组级学习: 升段(bin 1~6) 指令时间占比合计
+	rRiseFbSum : REAL;
+	rRiseCmdSum : REAL;
+	rFallTgtSum : REAL; // 12 段组级学习: 降段(bin 8~12) 指令时间占比合计
+	rFallFbSum : REAL;
+	rFallCmdSum : REAL;
+	rRiseGroupErr : REAL;
+	rFallGroupErr : REAL;
+	rGroupCorr : REAL;
+	rBinErr : REAL;
 	rT1 : REAL;
 	rT2 : REAL;
 	rT3 : REAL;
@@ -309,13 +320,45 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             END_IF
 
             // α 12 段自学习（梯形 nWaveType=3 + 矩形 nWaveType=4）
+            // 组级修正: 当 bin 1(底平)/bin 7(顶平) 被 ALPHA12_Q_MIN 钳死时，
+            // 组级误差(升 1..6 / 降 8..12) 会按 α 比例摊到组内其它 bin，
+            // 让组总占比能继续学习，避免溢出无人接手。
             IF bAlphaEnable AND (nWaveType = 3 OR nWaveType = 4) THEN
+                // 1. 计算组总占比
+                rRiseTgtSum  := 0.0; rRiseFbSum  := 0.0; rRiseCmdSum  := 0.0;
+                rFallTgtSum  := 0.0; rFallFbSum  := 0.0; rFallCmdSum  := 0.0;
+                FOR iBinK := 1 TO 6 DO
+                    rRiseTgtSum := rRiseTgtSum + rAlpha12Tgt[iBinK];
+                    rRiseFbSum  := rRiseFbSum  + rAlpha12Fb[iBinK];
+                    rRiseCmdSum := rRiseCmdSum + rAlpha12Cmd[iBinK];
+                END_FOR
+                FOR iBinK := 8 TO 12 DO
+                    rFallTgtSum := rFallTgtSum + rAlpha12Tgt[iBinK];
+                    rFallFbSum  := rFallFbSum  + rAlpha12Fb[iBinK];
+                    rFallCmdSum := rFallCmdSum + rAlpha12Cmd[iBinK];
+                END_FOR
+                rRiseGroupErr := rRiseTgtSum - rRiseFbSum;
+                rFallGroupErr := rFallTgtSum - rFallFbSum;
+
+                // 2. 各 bin 更新 = 自身误差 + 所属组的组级误差按 α 比例分摊
                 FOR iBinK := 1 TO 12 DO
+                    rBinErr := rAlpha12Tgt[iBinK] - rAlpha12Fb[iBinK];
+                    IF iBinK <= 6 AND rRiseCmdSum > 0.001 THEN
+                        rGroupCorr := rGroupW * rRiseGroupErr
+                                    * (rAlpha12Cmd[iBinK] / rRiseCmdSum);
+                    ELSIF iBinK >= 8 AND rFallCmdSum > 0.001 THEN
+                        rGroupCorr := rGroupW * rFallGroupErr
+                                    * (rAlpha12Cmd[iBinK] / rFallCmdSum);
+                    ELSE
+                        rGroupCorr := 0.0;  // 顶平 bin 7 单段无组可摊
+                    END_IF
                     rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK]
-                                       + rAlphaLR * (rAlpha12Tgt[iBinK] - rAlpha12Fb[iBinK]);
+                                       + rAlphaLR * (rBinErr + rGroupCorr);
                     IF rAlpha12Cmd[iBinK] < ALPHA12_Q_MIN THEN rAlpha12Cmd[iBinK] := ALPHA12_Q_MIN; END_IF
                     IF rAlpha12Cmd[iBinK] > ALPHA12_Q_MAX THEN rAlpha12Cmd[iBinK] := ALPHA12_Q_MAX; END_IF
                 END_FOR
+
+                // 3. 归一化使 Σα = 1
                 rAlphaSum := 0.0;
                 FOR iBinK := 1 TO 12 DO
                     rAlphaSum := rAlphaSum + rAlpha12Cmd[iBinK];
