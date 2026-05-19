@@ -15,9 +15,6 @@ VAR
 	fbMFF_O : FB_ModelFeedforward;
 	fbADRC_O : FB_HydraulicADRC;
 	fbILC_O : FB_ILC;
-	rVTotal_W : REAL; // 水路总容积
-	rVTotal_O : REAL; // 油路总容积
-	rPs_Pa : REAL; // 供油压力 (Pa)
 	rError_W : REAL; // 水路跟踪误差
 	rError_O : REAL; // 油路跟踪误差
 	rUTotal_W : REAL; // 水路总控制量
@@ -249,19 +246,6 @@ IF bWaterActive AND bOilActive THEN
 END_IF
 
 
-
-// ============================================================
-// 计算系统参数
-// 供油压力的单位换算: MPa → Pa，并设置安全下限
-// 总容积 = 基础容积 + 被试件容积，并设置安全下限
-// ============================================================
-rPs_Pa := GVL_PulsePressure.PP_Hydro_WorkingPressure * 1.0E6;
-IF rPs_Pa < 1.0E6 THEN rPs_Pa := 35.0E6; END_IF  // 默认35MPa
-
-rVTotal_W := GVL_PulsePressure.PP_Water_VBase + GVL_PulsePressure.PP_Water_VSpecimen;
-rVTotal_O := GVL_PulsePressure.PP_Oil_VBase + GVL_PulsePressure.PP_Oil_VSpecimen;
-IF rVTotal_W < 1.0E-6 THEN rVTotal_W := 0.7E-3; END_IF  // 默认0.7L
-IF rVTotal_O < 1.0E-6 THEN rVTotal_O := 0.7E-3; END_IF
 
 // ============================================================
 // 计算实际PMin（直接使用上位机设定值，0即为0MPa）
