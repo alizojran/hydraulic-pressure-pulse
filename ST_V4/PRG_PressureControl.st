@@ -456,8 +456,8 @@ CASE iState OF
 IF bBurstMode THEN
     // ================================================================
     // 爆破试验流程
-    //   相位0(升压):  以 rate1=PP_*_RiseRate 从 0 升至 BurstPressure
-    //   相位1(保压):  在 BurstPressure 上保持 HoldTime
+    //   相位0(升压):  以 rate1=PP_*_RiseRate 升/降到 BurstHoldP[iHoldIdx]
+    //   相位1(保压):  在 BurstHoldP[iHoldIdx] 上保持 BurstHoldT[iHoldIdx]
     //   相位2(续升):  沿用 rate1=PP_*_RiseRate 继续升压
     //   相位3(已爆破): 已记录峰值，进入状态4停机
     // 爆破判据(仅在相位2评估):
@@ -473,18 +473,14 @@ IF bBurstMode THEN
             rBurstRate1_W := 0.01;  // 安全兜底 0.01 MPa/s
         END_IF
 
-        // 解析有效保压段数 + 段数据（含旧单段兜底）
+        // 段数据：HoldCount 钳到 [1,10]，用 BurstHoldP[1..N]/BurstHoldT[1..N]
         iHoldCount_W := REAL_TO_INT(GVL_PulsePressure.PP_Water_BurstHoldCount);
-        IF iHoldCount_W < 1 OR iHoldCount_W > 10 THEN
-            iHoldCount_W := 1;
-            rEffHoldP_W[1] := GVL_PulsePressure.PP_Water_BurstPressure;
-            rEffHoldT_W[1] := GVL_PulsePressure.PP_Water_HoldTime;
-        ELSE
-            FOR iSegK := 1 TO iHoldCount_W DO
-                rEffHoldP_W[iSegK] := GVL_PulsePressure.PP_Water_BurstHoldP[iSegK];
-                rEffHoldT_W[iSegK] := GVL_PulsePressure.PP_Water_BurstHoldT[iSegK];
-            END_FOR
-        END_IF
+        IF iHoldCount_W < 1 THEN iHoldCount_W := 1; END_IF
+        IF iHoldCount_W > 10 THEN iHoldCount_W := 10; END_IF
+        FOR iSegK := 1 TO iHoldCount_W DO
+            rEffHoldP_W[iSegK] := GVL_PulsePressure.PP_Water_BurstHoldP[iSegK];
+            rEffHoldT_W[iSegK] := GVL_PulsePressure.PP_Water_BurstHoldT[iSegK];
+        END_FOR
 
         // 给定值递推
         CASE iBurstPhase_W OF
@@ -595,16 +591,12 @@ IF bBurstMode THEN
         END_IF
 
         iHoldCount_O := REAL_TO_INT(GVL_PulsePressure.PP_Oil_BurstHoldCount);
-        IF iHoldCount_O < 1 OR iHoldCount_O > 10 THEN
-            iHoldCount_O := 1;
-            rEffHoldP_O[1] := GVL_PulsePressure.PP_Oil_BurstPressure;
-            rEffHoldT_O[1] := GVL_PulsePressure.PP_Oil_HoldTime;
-        ELSE
-            FOR iSegK := 1 TO iHoldCount_O DO
-                rEffHoldP_O[iSegK] := GVL_PulsePressure.PP_Oil_BurstHoldP[iSegK];
-                rEffHoldT_O[iSegK] := GVL_PulsePressure.PP_Oil_BurstHoldT[iSegK];
-            END_FOR
-        END_IF
+        IF iHoldCount_O < 1 THEN iHoldCount_O := 1; END_IF
+        IF iHoldCount_O > 10 THEN iHoldCount_O := 10; END_IF
+        FOR iSegK := 1 TO iHoldCount_O DO
+            rEffHoldP_O[iSegK] := GVL_PulsePressure.PP_Oil_BurstHoldP[iSegK];
+            rEffHoldT_O[iSegK] := GVL_PulsePressure.PP_Oil_BurstHoldT[iSegK];
+        END_FOR
 
         CASE iBurstPhase_O OF
             5:  // 待机 → 立即开始第 1 段升压

@@ -137,16 +137,14 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Water_ILC_LearningRate := TwoWord_to_Float.Output; // 58-59: 水路ILC学习率
 i := i + 2;
 
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_BurstPressure := TwoWord_to_Float.Output;  // 60-61: 水路爆破压力
+// 60-61: 保留 (原 PP_Water_BurstPressure，V4 起被 BurstHoldP[1] 取代)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
 GVL_PulsePressure.PP_Water_RiseRate := TwoWord_to_Float.Output;       // 62-63: 水路爆破升压速率(MPa/s)
 i := i + 2;
 
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_HoldTime := TwoWord_to_Float.Output;       // 64-65: 水路爆破保压时间
+// 64-65: 保留 (原 PP_Water_HoldTime，V4 起被 BurstHoldT[1] 取代)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
@@ -223,16 +221,14 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Oil_ILC_LearningRate := TwoWord_to_Float.Output; // 106-107: 油路ILC学习率
 i := i + 2;
 
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_BurstPressure := TwoWord_to_Float.Output;    // 108-109: 油路爆破压力
+// 108-109: 保留 (原 PP_Oil_BurstPressure，V4 起被 BurstHoldP[1] 取代)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
 GVL_PulsePressure.PP_Oil_RiseRate := TwoWord_to_Float.Output;         // 110-111: 油路爆破升压速率(MPa/s)
 i := i + 2;
 
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_HoldTime := TwoWord_to_Float.Output;         // 112-113: 油路爆破保压时间
+// 112-113: 保留 (原 PP_Oil_HoldTime，V4 起被 BurstHoldT[1] 取代)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
