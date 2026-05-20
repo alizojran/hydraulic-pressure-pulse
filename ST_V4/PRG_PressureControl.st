@@ -88,6 +88,7 @@ VAR
 	// 爆破检测参数
 	rBurstDropPct : REAL := 0.7;   // 跌至峰值×0.7以下判定爆破
 	rBurstDropRateLim : REAL := -20.0; // 跌速门限(MPa/s)，低于此值判定爆破
+	rCurrentCmd : REAL; // 当前激活通道的指令压力(MPa)，给外部 AO 模块映射用
 END_VAR
 {*
 25.01为水侧产品端压力
@@ -840,6 +841,15 @@ IF rUTotal_O < -10.0 THEN rUTotal_O := -10.0; END_IF
 
 GVL_PulsePressure.PP_Water_ControlOutput := rUTotal_W;
 GVL_PulsePressure.PP_Oil_ControlOutput := rUTotal_O;
+
+// 当前激活通道的指令压力(MPa)，可被外部 AO/模块直接映射
+IF bWaterActive THEN
+    rCurrentCmd := GVL_PulsePressure.PP_Water_SetpointPressure;
+ELSIF bOilActive THEN
+    rCurrentCmd := GVL_PulsePressure.PP_Oil_SetpointPressure;
+ELSE
+    rCurrentCmd := 0.0;
+END_IF
 METHOD InitializeControllers
 
 // 重置所有功能块
