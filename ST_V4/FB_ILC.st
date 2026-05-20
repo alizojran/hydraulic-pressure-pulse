@@ -128,6 +128,17 @@ VAR
 	iTargetAboveMidCount : INT;
 	iTotalDetectCount : INT;
 	bWaveDetected : BOOL;
+	// --- 任意波（nWaveType=5）逐点 ILC 内部状态 ---
+	rCorrTable5 : ARRAY[0..999] OF REAL;  // 学到的逐点加性修正量 (MPa)
+	rErrSum5    : ARRAY[0..999] OF REAL;  // 本周期各点误差累加
+	iErrCnt5    : ARRAY[0..999] OF INT;   // 本周期各点命中次数
+	rQBuf5      : ARRAY[0..999] OF REAL;  // Q-filter 临时缓冲（先存均值，再原地平滑）
+	iPtsPerCycle5Last : INT;              // 上一周期点数，变化时清表
+	iIdx5       : INT;                    // 当前点钳位索引
+	iLeft5      : INT;                    // Q-filter 左邻
+	iRight5     : INT;                    // Q-filter 右邻
+	rMeanErr5   : REAL;                   // 平滑后单点误差
+	rCorrLimit5 : REAL;                   // 单点修正限幅
 	// --- 授权检查内部状态 ---
 	bAuthChecked : BOOL;     // 已检查标志（每次重启检查一次）
 	bAuthorized : BOOL;      // 鉴权通过
@@ -159,6 +170,11 @@ VAR CONSTANT
 	FLAT_THR_SIN      : REAL := 0.40;
 	FLAT_THR_TRAP     : REAL := 0.70;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
+	// --- 任意波 (nWaveType=5) 逐点 ILC ---
+	POINTS_MAX        : INT  := 1000;    // 逐点表最大容量；iPointsPerCycle > POINTS_MAX 时该分支降级透传
+	ILC5_Q_W0         : REAL := 0.25;    // Q-filter 三点核：左/右权
+	ILC5_Q_W1         : REAL := 0.50;    // Q-filter 三点核：中心权
+	ILC5_CORR_LIMIT_K : REAL := 0.5;     // 单点修正限幅：K * rPrevTargetRange
 END_VAR
 // ============================================================
 // 授权检查（首次调用懒加载，每次启动只查一次）
@@ -243,6 +259,11 @@ IF bReset OR NOT bEnable THEN
         END_FOR
         rPlatBotA := 0.0; rPlatBotB := 0.0;
         rPlatTopA := 0.0; rPlatTopB := 0.0;
+        // 任意波逐点 ILC：清学习修正表
+        FOR iBinK := 0 TO POINTS_MAX - 1 DO
+            rCorrTable5[iBinK] := 0.0;
+        END_FOR
+        iPtsPerCycle5Last := 0;
     END_IF
     rOutput        := 0.0;
     rVirtualTarget := 0.0;
@@ -266,6 +287,10 @@ IF bReset OR NOT bEnable THEN
     rFbSumTopA := 0.0; rFbSumTopB := 0.0;
     iCntBotA := 0; iCntBotB := 0;
     iCntTopA := 0; iCntTopB := 0;
+    FOR iBinK := 0 TO POINTS_MAX - 1 DO
+        rErrSum5[iBinK] := 0.0;
+        iErrCnt5[iBinK] := 0;
+    END_FOR
     bNewCyclePrev  := FALSE;
     IF NOT bEnable THEN
         RETURN;
@@ -440,6 +465,42 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
+            // 任意波 (nWaveType=5) 逐点 ILC: P-type + 三点 Q-filter
+            // 模型：rVirtualTarget[i] = rTargetRaw[i] + rCorrTable5[i]
+            //       rCorrTable5[i] += LR · Q(mean_err[i])
+            // 周期点数变化时清表（结构不可比），iPointsPerCycle > POINTS_MAX 时跳过（降级透传）
+            IF bAlphaEnable AND nWaveType = 5 AND iPointsPerCycle <= POINTS_MAX THEN
+                IF iPointsPerCycle <> iPtsPerCycle5Last THEN
+                    FOR iBinK := 0 TO POINTS_MAX - 1 DO
+                        rCorrTable5[iBinK] := 0.0;
+                    END_FOR
+                    iPtsPerCycle5Last := iPointsPerCycle;
+                END_IF
+                // 1) 各点平均误差 → rQBuf5
+                FOR iBinK := 0 TO iPointsPerCycle - 1 DO
+                    IF iErrCnt5[iBinK] > 0 THEN
+                        rQBuf5[iBinK] := rErrSum5[iBinK] / INT_TO_REAL(iErrCnt5[iBinK]);
+                    ELSE
+                        rQBuf5[iBinK] := 0.0;
+                    END_IF
+                END_FOR
+                // 2) 三点环绕 Q-filter + 学习率更新 + 限幅
+                rCorrLimit5 := ILC5_CORR_LIMIT_K * rPrevTargetRange;
+                IF rCorrLimit5 < 0.001 THEN rCorrLimit5 := 0.001; END_IF
+                FOR iBinK := 0 TO iPointsPerCycle - 1 DO
+                    iLeft5  := iBinK - 1;
+                    iRight5 := iBinK + 1;
+                    IF iLeft5  < 0                  THEN iLeft5  := iPointsPerCycle - 1; END_IF
+                    IF iRight5 >= iPointsPerCycle   THEN iRight5 := 0;                   END_IF
+                    rMeanErr5 := ILC5_Q_W0 * rQBuf5[iLeft5]
+                               + ILC5_Q_W1 * rQBuf5[iBinK]
+                               + ILC5_Q_W0 * rQBuf5[iRight5];
+                    rCorrTable5[iBinK] := rCorrTable5[iBinK] + rLearningRate * rMeanErr5;
+                    IF rCorrTable5[iBinK] >  rCorrLimit5 THEN rCorrTable5[iBinK] :=  rCorrLimit5; END_IF
+                    IF rCorrTable5[iBinK] < -rCorrLimit5 THEN rCorrTable5[iBinK] := -rCorrLimit5; END_IF
+                END_FOR
+            END_IF
+
             // 平台分 2 段幅值修正学习（梯形 + 矩形）
             // 双门控：目标平台时间占比 < 3% → 跳过并衰减；样本不足 → 跳过
             IF bPlatCorrEnable AND (nWaveType = 3 OR nWaveType = 4) THEN
@@ -528,6 +589,14 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     rFbSumTopA := 0.0; rFbSumTopB := 0.0;
     iCntBotA := 0; iCntBotB := 0;
     iCntTopA := 0; iCntTopB := 0;
+
+    // 任意波逐点 ILC 误差累加器清零
+    IF nWaveType = 5 THEN
+        FOR iBinK := 0 TO POINTS_MAX - 1 DO
+            rErrSum5[iBinK] := 0.0;
+            iErrCnt5[iBinK] := 0;
+        END_FOR
+    END_IF
 
 END_IF
 
@@ -662,6 +731,15 @@ IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 AND rHalfRange > 0.001 T
     iFbBin12[iBinK] := iFbBin12[iBinK] + 1;
 END_IF
 
+// --------- 任意波 (nWaveType=5) 逐点误差累加 ---------
+IF nWaveType = 5 AND iIterCount >= 1 AND iPointsPerCycle <= POINTS_MAX THEN
+    iIdx5 := iPointIndex;
+    IF iIdx5 < 0                THEN iIdx5 := 0;                  END_IF
+    IF iIdx5 >= iPointsPerCycle THEN iIdx5 := iPointsPerCycle - 1; END_IF
+    rErrSum5[iIdx5] := rErrSum5[iIdx5] + (rTargetRaw - rActual);
+    iErrCnt5[iIdx5] := iErrCnt5[iIdx5] + 1;
+END_IF
+
 // --------- 平台 2 段反馈累加（按 cmd phase 切割）---------
 IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 THEN
     IF rPhi < rT1Cached AND rT1Cached > 0.001 THEN
@@ -698,6 +776,22 @@ END_IF
 IF NOT bVInitialized THEN
     rVirtualTarget := rTargetRaw;
     rOutput        := 0.0;
+    bNewCyclePrev  := bNewCycle;
+    RETURN;
+END_IF
+
+// 任意波 (nWaveType=5)：加性逐点 ILC，跳过 vMin/vMax 仿射重映射
+// iPointsPerCycle > POINTS_MAX 时降级透传
+IF nWaveType = 5 THEN
+    IF iPointsPerCycle <= POINTS_MAX THEN
+        iIdx5 := iPointIndex;
+        IF iIdx5 < 0                THEN iIdx5 := 0;                  END_IF
+        IF iIdx5 >= iPointsPerCycle THEN iIdx5 := iPointsPerCycle - 1; END_IF
+        rVirtualTarget := rTargetRaw + rCorrTable5[iIdx5];
+    ELSE
+        rVirtualTarget := rTargetRaw;
+    END_IF
+    rOutput        := rVirtualTarget - rTargetRaw;
     bNewCyclePrev  := bNewCycle;
     RETURN;
 END_IF
