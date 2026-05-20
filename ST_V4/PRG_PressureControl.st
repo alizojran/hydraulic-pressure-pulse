@@ -574,11 +574,12 @@ IF bBurstMode THEN
         IF rUTotal_W < -10.0 THEN rUTotal_W := -10.0; END_IF
         PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_W * 10;
 
-        // 回写诊断
+        // 回写诊断 + 模块输出指令
         GVL_PulsePressure.PP_Water_SetpointPressure := rBurstSetpoint_W;
         GVL_PulsePressure.PP_Water_PressureError := rBurstSetpoint_W - GVL_PulsePressure.PP_Water_ActualPressure;
         GVL_PulsePressure.PP_Water_PeakPressure := rBurstPeak_W;
         GVL_PulsePressure.PP_Water_BurstPhase := INT_TO_REAL(iBurstPhase_W);
+        rCurrentCmd := rBurstSetpoint_W;
     ELSE
         rUTotal_W := 0.0;
     END_IF
@@ -687,6 +688,7 @@ IF bBurstMode THEN
         GVL_PulsePressure.PP_Oil_PressureError := rBurstSetpoint_O - GVL_PulsePressure.PP_Oil_ActualPressure;
         GVL_PulsePressure.PP_Oil_PeakPressure := rBurstPeak_O;
         GVL_PulsePressure.PP_Oil_BurstPhase := INT_TO_REAL(iBurstPhase_O);
+        rCurrentCmd := rBurstSetpoint_O;
     ELSE
         rUTotal_O := 0.0;
     END_IF
@@ -749,6 +751,7 @@ END_IF
         ELSE
             PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_W := 0.0;
         END_IF
+        rCurrentCmd := rStopRampVal_W;
     END_IF
 
     // 油路卸压（仅对激活通道执行）
@@ -762,6 +765,7 @@ END_IF
         ELSE
             PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O := 0.0;
         END_IF
+        rCurrentCmd := rStopRampVal_O;
     END_IF
 
     // 激活通道卸压完成 → 置就绪标志，通知PC（PC发命令0回空闲）
