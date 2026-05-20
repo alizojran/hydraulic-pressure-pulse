@@ -40,6 +40,7 @@ VAR_OUTPUT
 	nWaveType : INT := 0; // 0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波
 	rFlatFrac : REAL;
 	rSymFrac : REAL;
+	nAuthStatus : INT; // 鉴权状态 0=未检查 1=授权 2=未授权 3=读序列号失败
 END_VAR
 VAR
 	rMidpoint : REAL;
@@ -127,8 +128,22 @@ VAR
 	iTargetAboveMidCount : INT;
 	iTotalDetectCount : INT;
 	bWaveDetected : BOOL;
+	// --- 授权检查内部状态 ---
+	bAuthChecked : BOOL;     // 已检查标志（每次重启检查一次）
+	bAuthorized : BOOL;      // 鉴权通过
+	sSerial : STRING(255);   // 实际读到的设备序列号
+	pSerialBuf : POINTER TO STRING(255);
+	diSerialLen : DINT;
 END_VAR
 VAR CONSTANT
+	// --- 授权序列号白名单 (最多 4 个) ---
+	// 每台 PLC 用 SysTargetGetSerialNumber 读出来后填进来，
+	// 然后在 CODESYS 里 "另存为编译库" 输出 .compiled-library，源码不可见。
+	AUTHORIZED_SERIAL_1 : STRING(64) := '100000006c1f7e74';
+	AUTHORIZED_SERIAL_2 : STRING(64) := '';
+	AUTHORIZED_SERIAL_3 : STRING(64) := '';
+	AUTHORIZED_SERIAL_4 : STRING(64) := '';
+	// --- 其它常量 ---
 	ALPHA_Q_MIN       : REAL := 0.04;
 	ALPHA_Q_MAX       : REAL := 0.35;
 	ALPHA12_Q_MIN     : REAL := 0.02;
@@ -145,6 +160,44 @@ VAR CONSTANT
 	FLAT_THR_TRAP     : REAL := 0.70;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
 END_VAR
+// ============================================================
+// 授权检查（首次调用懒加载，每次启动只查一次）
+// 未授权时 FB 退化为透传，等同于 bEnable=FALSE，看不出与"未启用"的区别。
+// ============================================================
+IF NOT bAuthChecked THEN
+    pSerialBuf := ADR(sSerial);
+    diSerialLen := SIZEOF(sSerial);
+    IF SysTarget.SysTargetGetSerialNumber(
+           ppsSerialNumber := ADR(pSerialBuf),
+           pnMaxLen        := ADR(diSerialLen)) = 0 THEN
+        // 读到序列号后逐个白名单比对（空槽位会被排除）
+        bAuthorized := FALSE;
+        IF LEN(sSerial) >= 8 THEN
+            IF AUTHORIZED_SERIAL_1 <> '' AND sSerial = AUTHORIZED_SERIAL_1 THEN bAuthorized := TRUE; END_IF
+            IF AUTHORIZED_SERIAL_2 <> '' AND sSerial = AUTHORIZED_SERIAL_2 THEN bAuthorized := TRUE; END_IF
+            IF AUTHORIZED_SERIAL_3 <> '' AND sSerial = AUTHORIZED_SERIAL_3 THEN bAuthorized := TRUE; END_IF
+            IF AUTHORIZED_SERIAL_4 <> '' AND sSerial = AUTHORIZED_SERIAL_4 THEN bAuthorized := TRUE; END_IF
+        END_IF
+        IF bAuthorized THEN
+            nAuthStatus := 1;
+        ELSE
+            nAuthStatus := 2;
+        END_IF
+    ELSE
+        bAuthorized := FALSE;
+        nAuthStatus := 3;
+    END_IF
+    bAuthChecked := TRUE;
+END_IF
+
+// 未授权：强制透传（rVirtualTarget = rTargetRaw, rOutput = 0），让 PID 直接跟踪原始波形
+IF NOT bAuthorized THEN
+    rOutput        := 0.0;
+    rVirtualTarget := rTargetRaw;
+    bNewCyclePrev  := bNewCycle;
+    RETURN;
+END_IF
+
 // ============================================================
 // 复位 / 禁用
 // ============================================================
