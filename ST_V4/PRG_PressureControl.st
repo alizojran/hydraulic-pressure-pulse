@@ -910,6 +910,12 @@ fbILC_W(
 rUIlc_W := fbILC_W.rOutput;
 GVL_PulsePressure.PP_Water_ILC_Output := rUIlc_W;
 GVL_PulsePressure.PP_Water_ILC_Iteration := DINT_TO_REAL(fbILC_W.iIteration);
+// 自学习中标志：使能 + 未收敛 即视为正在学习（含暖机阶段）
+IF (GVL_PulsePressure.PP_Water_ILC_Enable = 1.0) AND NOT fbILC_W.bConverged THEN
+    GVL_PulsePressure.PP_Water_ILC_Learning := 1.0;
+ELSE
+    GVL_PulsePressure.PP_Water_ILC_Learning := 0.0;
+END_IF
 
 // 修正后的目标：ILC 使能时用其预畸变目标，否则透传原始波形目标
 // （FB_ILC 在 bEnable=FALSE 时 rVirtualTarget=0，必须回退）
@@ -990,6 +996,12 @@ fbILC_O(
 rUIlc_O := fbILC_O.rOutput;
 GVL_PulsePressure.PP_Oil_ILC_Output := rUIlc_O;
 GVL_PulsePressure.PP_Oil_ILC_Iteration := DINT_TO_REAL(fbILC_O.iIteration);
+// 自学习中标志
+IF (GVL_PulsePressure.PP_Oil_ILC_Enable = 1.0) AND NOT fbILC_O.bConverged THEN
+    GVL_PulsePressure.PP_Oil_ILC_Learning := 1.0;
+ELSE
+    GVL_PulsePressure.PP_Oil_ILC_Learning := 0.0;
+END_IF
 
 // 修正后的目标：ILC 使能时用其预畸变目标，否则透传原始波形目标
 IF GVL_PulsePressure.PP_Oil_ILC_Enable = 1.0 THEN

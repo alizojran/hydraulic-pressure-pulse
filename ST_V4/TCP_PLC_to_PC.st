@@ -182,8 +182,13 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 44-45: 水路ILC迭代次数
 j := j + 2;
 
-// 46-49: 保留 (原 PP_Water_ADRC_Output / PP_Water_ESO_Disturbance，MFF/ADRC 已废弃)
-j := j + 4;
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ILC_Learning);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 46-47: 水路 ILC 自学习中标志 (1=学习中 0=空闲/已收敛)
+j := j + 2;
+
+// 48-49: 保留 (原 PP_Water_ESO_Disturbance)
+j := j + 2;
 
 // ============================================================
 // 【油路实时数据区】（WORD地址 50–79）
@@ -284,8 +289,13 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 74-75: 油路ILC迭代次数
 j := j + 2;
 
-// 76-79: 保留 (原 PP_Oil_ADRC_Output / PP_Oil_ESO_Disturbance，MFF/ADRC 已废弃)
-j := j + 4;
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ILC_Learning);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 76-77: 油路 ILC 自学习中标志 (1=学习中 0=空闲/已收敛)
+j := j + 2;
+
+// 78-79: 保留 (原 PP_Oil_ESO_Disturbance)
+j := j + 2;
 
 // ============================================================
 // 【液压站实时数据区】（WORD地址 80–91）

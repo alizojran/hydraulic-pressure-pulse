@@ -93,6 +93,7 @@ VAR_GLOBAL
 	PP_Water_PID_Output : REAL; // 水路 PID 反馈输出(V)
 	PP_Water_ILC_Output : REAL; // 水路ILC学习输出(V)
 	PP_Water_ILC_Iteration : REAL; // 水路ILC当前迭代次数
+	PP_Water_ILC_Learning : REAL; // 水路ILC自学习中标志 1=学习中 0=空闲/已收敛
 	PP_Oil_ActualPressure : REAL; // 油路实际压力(MPa)
 	PP_Oil_SetpointPressure : REAL; // 油路当前给定压力(MPa)
 	PP_Oil_PressureError : REAL; // 油路压力偏差(MPa)
@@ -106,6 +107,7 @@ VAR_GLOBAL
 	PP_Oil_PID_Output : REAL; // 油路 PID 反馈输出(V)
 	PP_Oil_ILC_Output : REAL; // 油路ILC学习输出(V)
 	PP_Oil_ILC_Iteration : REAL; // 油路ILC当前迭代次数
+	PP_Oil_ILC_Learning : REAL; // 油路ILC自学习中标志 1=学习中 0=空闲/已收敛
 	PP_Hydro_Pressure : REAL; // 液压站系统压力(MPa)
 	PP_Hydro_Temperature : REAL; // 液压油温度(°C)
 	PP_Hydro_OilLevel : REAL; // 液位值(mm)
