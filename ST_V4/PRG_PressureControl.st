@@ -54,8 +54,8 @@ VAR
 	bBurstMode : BOOL; // 当前周期是否为爆破模式 (TestMode=2 或 3)
 	// 爆破: 水路
 	fbBurstPID_W : FB_HydraulicPID;
-	iBurstPhase_W : INT; // 0=升压 1=保压 2=续升 3=已爆破 4=到上限未爆破
-	iBurstPhasePrev_W : INT; // 上周期相位（用于切换检测）
+	iBurstPhase_W : INT := 5; // 5=待机 0=升压 1=保压 2=续升 3=已爆破 4=到上限未爆破
+	iBurstPhasePrev_W : INT := 5; // 上周期相位（用于切换检测）
 	iHoldIdx_W : INT; // 当前保压段序号 1..N
 	iHoldCount_W : INT; // 本次试验有效保压段数
 	rBurstSetpoint_W : REAL; // 给定压力(MPa)
@@ -70,8 +70,8 @@ VAR
 	rKiEff_W : REAL; // 本周期 PID Ki（仅保压段非零）
 	// 爆破: 油路
 	fbBurstPID_O : FB_HydraulicPID;
-	iBurstPhase_O : INT;
-	iBurstPhasePrev_O : INT;
+	iBurstPhase_O : INT := 5; // 同水路
+	iBurstPhasePrev_O : INT := 5;
 	iHoldIdx_O : INT;
 	iHoldCount_O : INT;
 	rBurstSetpoint_O : REAL;
@@ -196,7 +196,7 @@ IF bCmdChanged THEN
             InitializeControllers();
             // 爆破模式：清零结果与相位，重新开始一次爆破试验
             IF GVL_PulsePressure.PP_TestMode = 2.0 THEN
-                iBurstPhase_W := 0;
+                iBurstPhase_W := 5;  // 进入待机；状态3首周期会切到 0
                 iBurstPhasePrev_W := -1;  // 强制首周期触发"切换"，复位积分
                 iHoldIdx_W := 1;
                 rBurstSetpoint_W := 0.0;
@@ -208,7 +208,7 @@ IF bCmdChanged THEN
                 GVL_PulsePressure.PP_Water_BurstResult := 0.0;
                 GVL_PulsePressure.PP_Water_BurstPhase := 0.0;
             ELSIF GVL_PulsePressure.PP_TestMode = 3.0 THEN
-                iBurstPhase_O := 0;
+                iBurstPhase_O := 5;  // 进入待机
                 iBurstPhasePrev_O := -1;
                 iHoldIdx_O := 1;
                 rBurstSetpoint_O := 0.0;
@@ -487,6 +487,10 @@ IF bBurstMode THEN
 
         // 给定值递推
         CASE iBurstPhase_W OF
+            5:  // 待机 → 立即开始第 1 段升压
+                rBurstSetpoint_W := 0.0;
+                iHoldIdx_W := 1;
+                iBurstPhase_W := 0;
             0:  // 升/降压到第 iHoldIdx_W 段目标
                 rTargetSeg_W := rEffHoldP_W[iHoldIdx_W];
                 IF rBurstSetpoint_W < rTargetSeg_W THEN
@@ -602,6 +606,10 @@ IF bBurstMode THEN
         END_IF
 
         CASE iBurstPhase_O OF
+            5:  // 待机 → 立即开始第 1 段升压
+                rBurstSetpoint_O := 0.0;
+                iHoldIdx_O := 1;
+                iBurstPhase_O := 0;
             0:
                 rTargetSeg_O := rEffHoldP_O[iHoldIdx_O];
                 IF rBurstSetpoint_O < rTargetSeg_O THEN

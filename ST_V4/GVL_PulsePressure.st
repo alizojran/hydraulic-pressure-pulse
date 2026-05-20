@@ -34,7 +34,7 @@ VAR_GLOBAL
 	PP_Water_BurstHoldP : ARRAY[1..10] OF REAL; // 水路各保压段目标压力(MPa)
 	PP_Water_BurstHoldT : ARRAY[1..10] OF REAL; // 水路各保压段保压时长(s)
 	PP_Water_BurstResult : REAL; // 水路爆破压力记录(MPa)，0 表示尚未爆破
-	PP_Water_BurstPhase : REAL; // 水路爆破相位 0=升压 1=保压 2=续升 3=已爆破 4=到上限未爆破
+	PP_Water_BurstPhase : REAL; // 水路爆破相位 5=待机 0=升压 1=保压 2=续升 3=已爆破 4=到上限未爆破
 	PP_Water_CycleReset : REAL; // 水路循环计数清零命令(上升沿有效)
 	PP_Oil_TargetPressure : REAL; // 油路目标峰值压力(MPa) = PMax
 	PP_Oil_MinPressure : REAL; // 油路最低压力(MPa) = PMin
@@ -61,7 +61,7 @@ VAR_GLOBAL
 	PP_Oil_BurstHoldP : ARRAY[1..10] OF REAL; // 油路各保压段目标压力(MPa)
 	PP_Oil_BurstHoldT : ARRAY[1..10] OF REAL; // 油路各保压段保压时长(s)
 	PP_Oil_BurstResult : REAL; // 油路爆破压力记录(MPa)，0 表示尚未爆破
-	PP_Oil_BurstPhase : REAL; // 油路爆破相位 0=升压 1=保压 2=续升 3=已爆破 4=到上限未爆破
+	PP_Oil_BurstPhase : REAL; // 油路爆破相位 5=待机 0=升压 1=保压 2=续升 3=已爆破 4=到上限未爆破
 	PP_Oil_CycleReset : REAL; // 油路循环计数清零命令(上升沿有效)
 	PP_Hydro_HighLimit : REAL; // 液压站高压保护限值(MPa)
 	PP_Hydro_TempLimit : REAL; // 液压油温度保护限值(°C)
