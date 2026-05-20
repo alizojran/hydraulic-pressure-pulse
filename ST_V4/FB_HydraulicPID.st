@@ -4,6 +4,7 @@ VAR_INPUT
 	rError : REAL; // 跟踪误差 r - y (MPa)
 	rDt : REAL; // 控制周期 (s)
 	bReset : BOOL; // 复位 PID 内部状态
+	bResetIntegral : BOOL; // 仅复位积分项（相位切换用，不影响 P/D 输出）
 	rPID_Kp : REAL := 0.3; // 比例增益 (V/MPa)
 	rPID_Ki : REAL := 0.0; // 积分增益 (V/MPa/s)
 	rPID_Kd : REAL := 0.0; // 微分增益 (V·s/MPa)
@@ -41,6 +42,12 @@ END_IF
 IF rDt < 1.0E-6 THEN
 	rOutput := 0.0;
 	RETURN;
+END_IF
+
+// 仅复位积分（不影响输出，相位切换时清掉 hold 段累积的 I）
+IF bResetIntegral THEN
+	rIntegral := 0.0;
+	rPID_I := 0.0;
 END_IF
 
 // 比例项

@@ -427,7 +427,35 @@ i := i + 2;
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
 GVL_PulsePressure.PP_Oil_CycleReset := TwoWord_to_Float.Output;      // 182-183: 油路循环计数清零命令
 
-// 176-179 / 184-199 保留 (原 BurstRate2，V4 起续升沿用 RiseRate)
+// 176-179 保留 (原 BurstRate2，V4 起续升沿用 RiseRate)
+
+// 184-195: 爆破独立 PID 增益 + 多段保压段数
+i := 184;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Water_Burst_Kp := TwoWord_to_Float.Output;       // 184-185: 水路爆破 PID Kp
+i := i + 2;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Water_Burst_Ki := TwoWord_to_Float.Output;       // 186-187: 水路爆破 PID Ki (保压段)
+i := i + 2;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_Burst_Kp := TwoWord_to_Float.Output;         // 188-189: 油路爆破 PID Kp
+i := i + 2;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_Burst_Ki := TwoWord_to_Float.Output;         // 190-191: 油路爆破 PID Ki (保压段)
+i := i + 2;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Water_BurstHoldCount := TwoWord_to_Float.Output; // 192-193: 水路保压段数 1~10
+i := i + 2;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_BurstHoldCount := TwoWord_to_Float.Output;   // 194-195: 油路保压段数 1~10
+
+// 196-199 保留
 
 
 
@@ -463,5 +491,24 @@ i := 200;
 FOR j := 0 TO 799 DO
     TwoWord_to_Float(word_low := HOLDING_REGISTER[200 + j*2], word_high := HOLDING_REGISTER[201 + j*2]);
     GVL_PulsePressure.PP_WaveUpload_Data[j] := TwoWord_to_Float.Output;
+END_FOR
+
+// ============================================================
+// 爆破多段保压数据区（WORD地址 1800-1879）
+//   1800-1819: 水路各段目标压力 PP_Water_BurstHoldP[1..10]
+//   1820-1839: 水路各段保压时长 PP_Water_BurstHoldT[1..10]
+//   1840-1859: 油路各段目标压力 PP_Oil_BurstHoldP[1..10]
+//   1860-1879: 油路各段保压时长 PP_Oil_BurstHoldT[1..10]
+//   1880-1999 保留
+// ============================================================
+FOR j := 1 TO 10 DO
+    TwoWord_to_Float(word_low := HOLDING_REGISTER[1798 + j*2], word_high := HOLDING_REGISTER[1799 + j*2]);
+    GVL_PulsePressure.PP_Water_BurstHoldP[j] := TwoWord_to_Float.Output;
+    TwoWord_to_Float(word_low := HOLDING_REGISTER[1818 + j*2], word_high := HOLDING_REGISTER[1819 + j*2]);
+    GVL_PulsePressure.PP_Water_BurstHoldT[j] := TwoWord_to_Float.Output;
+    TwoWord_to_Float(word_low := HOLDING_REGISTER[1838 + j*2], word_high := HOLDING_REGISTER[1839 + j*2]);
+    GVL_PulsePressure.PP_Oil_BurstHoldP[j] := TwoWord_to_Float.Output;
+    TwoWord_to_Float(word_low := HOLDING_REGISTER[1858 + j*2], word_high := HOLDING_REGISTER[1859 + j*2]);
+    GVL_PulsePressure.PP_Oil_BurstHoldT[j] := TwoWord_to_Float.Output;
 END_FOR
 END_PROGRAM

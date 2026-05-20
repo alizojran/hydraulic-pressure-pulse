@@ -53,21 +53,38 @@ VAR
 	PP_Oil_ActualPressure : REAL;
 	bBurstMode : BOOL; // 当前周期是否为爆破模式 (TestMode=2 或 3)
 	// 爆破: 水路
-	iBurstPhase_W : INT; // 0=升压 1=保压 2=续升 3=已爆破
+	fbBurstPID_W : FB_HydraulicPID;
+	iBurstPhase_W : INT; // 0=升压 1=保压 2=续升 3=已爆破 4=到上限未爆破
+	iBurstPhasePrev_W : INT; // 上周期相位（用于切换检测）
+	iHoldIdx_W : INT; // 当前保压段序号 1..N
+	iHoldCount_W : INT; // 本次试验有效保压段数
 	rBurstSetpoint_W : REAL; // 给定压力(MPa)
-	rBurstRate1_W : REAL; // 升压速率(MPa/s)，取自 PP_Water_RiseRate（升压+续升共用）
+	rBurstRate1_W : REAL; // 升压速率(MPa/s)，取自 PP_Water_RiseRate
 	rBurstHoldTimer_W : REAL; // 保压计时器(s)
 	rBurstPeak_W : REAL; // 运行最大压力(MPa)
 	rBurstPrev_W : REAL; // 上周期压力(MPa)，用于跌速判定
 	rBurstDropRate_W : REAL; // 当前压力跌速(MPa/s)
+	rEffHoldP_W : ARRAY[1..10] OF REAL; // 本周期使用的各段目标压力
+	rEffHoldT_W : ARRAY[1..10] OF REAL; // 本周期使用的各段保压时长
+	rTargetSeg_W : REAL; // 当前段目标压力
+	rKiEff_W : REAL; // 本周期 PID Ki（仅保压段非零）
 	// 爆破: 油路
+	fbBurstPID_O : FB_HydraulicPID;
 	iBurstPhase_O : INT;
+	iBurstPhasePrev_O : INT;
+	iHoldIdx_O : INT;
+	iHoldCount_O : INT;
 	rBurstSetpoint_O : REAL;
 	rBurstRate1_O : REAL;
 	rBurstHoldTimer_O : REAL;
 	rBurstPeak_O : REAL;
 	rBurstPrev_O : REAL;
 	rBurstDropRate_O : REAL;
+	rEffHoldP_O : ARRAY[1..10] OF REAL;
+	rEffHoldT_O : ARRAY[1..10] OF REAL;
+	rTargetSeg_O : REAL;
+	rKiEff_O : REAL;
+	iSegK : INT; // 段数组循环计数器
 	// 爆破检测参数
 	rBurstDropPct : REAL := 0.7;   // 跌至峰值×0.7以下判定爆破
 	rBurstDropRateLim : REAL := -20.0; // 跌速门限(MPa/s)，低于此值判定爆破
@@ -180,20 +197,26 @@ IF bCmdChanged THEN
             // 爆破模式：清零结果与相位，重新开始一次爆破试验
             IF GVL_PulsePressure.PP_TestMode = 2.0 THEN
                 iBurstPhase_W := 0;
+                iBurstPhasePrev_W := -1;  // 强制首周期触发"切换"，复位积分
+                iHoldIdx_W := 1;
                 rBurstSetpoint_W := 0.0;
                 rBurstHoldTimer_W := 0.0;
                 rBurstPeak_W := 0.0;
                 rBurstPrev_W := GVL_PulsePressure.PP_Water_ActualPressure;
                 rBurstDropRate_W := 0.0;
+                fbBurstPID_W(bReset := TRUE);
                 GVL_PulsePressure.PP_Water_BurstResult := 0.0;
                 GVL_PulsePressure.PP_Water_BurstPhase := 0.0;
             ELSIF GVL_PulsePressure.PP_TestMode = 3.0 THEN
                 iBurstPhase_O := 0;
+                iBurstPhasePrev_O := -1;
+                iHoldIdx_O := 1;
                 rBurstSetpoint_O := 0.0;
                 rBurstHoldTimer_O := 0.0;
                 rBurstPeak_O := 0.0;
                 rBurstPrev_O := GVL_PulsePressure.PP_Oil_ActualPressure;
                 rBurstDropRate_O := 0.0;
+                fbBurstPID_O(bReset := TRUE);
                 GVL_PulsePressure.PP_Oil_BurstResult := 0.0;
                 GVL_PulsePressure.PP_Oil_BurstPhase := 0.0;
             END_IF
@@ -441,7 +464,7 @@ IF bBurstMode THEN
     //   (b) 跌速 < rBurstDropRateLim(-20 MPa/s)
     // ================================================================
 
-    // ==================== 水路爆破 ====================
+    // ==================== 水路爆破（多段保压）====================
     IF bWaterActive THEN
         // 速率参数(每周期重算，允许在线调整)
         rBurstRate1_W := GVL_PulsePressure.PP_Water_RiseRate;
@@ -449,27 +472,58 @@ IF bBurstMode THEN
             rBurstRate1_W := 0.01;  // 安全兜底 0.01 MPa/s
         END_IF
 
+        // 解析有效保压段数 + 段数据（含旧单段兜底）
+        iHoldCount_W := REAL_TO_INT(GVL_PulsePressure.PP_Water_BurstHoldCount);
+        IF iHoldCount_W < 1 OR iHoldCount_W > 10 THEN
+            iHoldCount_W := 1;
+            rEffHoldP_W[1] := GVL_PulsePressure.PP_Water_BurstPressure;
+            rEffHoldT_W[1] := GVL_PulsePressure.PP_Water_HoldTime;
+        ELSE
+            FOR iSegK := 1 TO iHoldCount_W DO
+                rEffHoldP_W[iSegK] := GVL_PulsePressure.PP_Water_BurstHoldP[iSegK];
+                rEffHoldT_W[iSegK] := GVL_PulsePressure.PP_Water_BurstHoldT[iSegK];
+            END_FOR
+        END_IF
+
         // 给定值递推
         CASE iBurstPhase_W OF
-            0:
-                rBurstSetpoint_W := rBurstSetpoint_W + rBurstRate1_W * rDt;
-                IF rBurstSetpoint_W >= GVL_PulsePressure.PP_Water_BurstPressure THEN
-                    rBurstSetpoint_W := GVL_PulsePressure.PP_Water_BurstPressure;
+            0:  // 升/降压到第 iHoldIdx_W 段目标
+                rTargetSeg_W := rEffHoldP_W[iHoldIdx_W];
+                IF rBurstSetpoint_W < rTargetSeg_W THEN
+                    rBurstSetpoint_W := rBurstSetpoint_W + rBurstRate1_W * rDt;
+                    IF rBurstSetpoint_W >= rTargetSeg_W THEN
+                        rBurstSetpoint_W := rTargetSeg_W;
+                        rBurstHoldTimer_W := 0.0;
+                        iBurstPhase_W := 1;
+                    END_IF
+                ELSIF rBurstSetpoint_W > rTargetSeg_W THEN
+                    rBurstSetpoint_W := rBurstSetpoint_W - rBurstRate1_W * rDt;
+                    IF rBurstSetpoint_W <= rTargetSeg_W THEN
+                        rBurstSetpoint_W := rTargetSeg_W;
+                        rBurstHoldTimer_W := 0.0;
+                        iBurstPhase_W := 1;
+                    END_IF
+                ELSE
                     rBurstHoldTimer_W := 0.0;
                     iBurstPhase_W := 1;
                 END_IF
-            1:
+            1:  // 保压第 iHoldIdx_W 段
+                rBurstSetpoint_W := rEffHoldP_W[iHoldIdx_W];
                 rBurstHoldTimer_W := rBurstHoldTimer_W + rDt;
-                IF rBurstHoldTimer_W >= GVL_PulsePressure.PP_Water_HoldTime THEN
-                    iBurstPhase_W := 2;
+                IF rBurstHoldTimer_W >= rEffHoldT_W[iHoldIdx_W] THEN
+                    IF iHoldIdx_W < iHoldCount_W THEN
+                        iHoldIdx_W := iHoldIdx_W + 1;  // 下一段
+                        iBurstPhase_W := 0;
+                    ELSE
+                        iBurstPhase_W := 2;  // 全部保压完成 → 续升
+                    END_IF
                 END_IF
-            2:
+            2:  // 续升直至爆破/上限
                 rBurstSetpoint_W := rBurstSetpoint_W + rBurstRate1_W * rDt;
-                // 安全上限：给定值到 BurstMaxLimit 仍未检测到爆破 → 停机
                 IF GVL_PulsePressure.PP_Water_BurstMaxLimit > 0.0
                    AND rBurstSetpoint_W >= GVL_PulsePressure.PP_Water_BurstMaxLimit THEN
                     rBurstSetpoint_W := GVL_PulsePressure.PP_Water_BurstMaxLimit;
-                    iBurstPhase_W := 4;  // 到上限未爆破
+                    iBurstPhase_W := 4;
                     rStopRampVal_W := GVL_PulsePressure.PP_Water_ActualPressure;
                     rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
                     iState := 4;
@@ -484,7 +538,7 @@ IF bBurstMode THEN
         rBurstDropRate_W := (GVL_PulsePressure.PP_Water_ActualPressure - rBurstPrev_W) / rDt;
         rBurstPrev_W := GVL_PulsePressure.PP_Water_ActualPressure;
 
-        // 爆破检测(仅相位2)
+        // 爆破检测(仅续升相位 2)
         IF iBurstPhase_W = 2 THEN
             IF (GVL_PulsePressure.PP_Water_ActualPressure < rBurstPeak_W * rBurstDropPct)
                OR (rBurstDropRate_W < rBurstDropRateLim) THEN
@@ -496,41 +550,88 @@ IF bBurstMode THEN
             END_IF
         END_IF
 
-        // P 跟踪给定值
-        rPrePressErr_W := rBurstSetpoint_W - GVL_PulsePressure.PP_Water_ActualPressure;
-        rUTotal_W := rPrePressKp * rPrePressErr_W;
+        // PID 跟踪给定值
+        //   - 仅保压相位(1) 启用 Ki，避免斜坡段积分超调
+        //   - 相位切换时复位积分(bResetIntegral)，防止上一段累积影响下一段
+        IF iBurstPhase_W = 1 THEN
+            rKiEff_W := GVL_PulsePressure.PP_Water_Burst_Ki;
+        ELSE
+            rKiEff_W := 0.0;
+        END_IF
+        fbBurstPID_W(
+            bEnable        := TRUE,
+            rError         := rBurstSetpoint_W - GVL_PulsePressure.PP_Water_ActualPressure,
+            rDt            := rDt,
+            bReset         := FALSE,
+            bResetIntegral := (iBurstPhase_W <> iBurstPhasePrev_W),
+            rPID_Kp        := GVL_PulsePressure.PP_Water_Burst_Kp,
+            rPID_Ki        := rKiEff_W
+        );
+        iBurstPhasePrev_W := iBurstPhase_W;
+        rUTotal_W := fbBurstPID_W.rOutput;
         IF rUTotal_W > 10.0 THEN rUTotal_W := 10.0; END_IF
         IF rUTotal_W < -10.0 THEN rUTotal_W := -10.0; END_IF
         PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_W * 10;
 
         // 回写诊断
         GVL_PulsePressure.PP_Water_SetpointPressure := rBurstSetpoint_W;
-        GVL_PulsePressure.PP_Water_PressureError := rPrePressErr_W;
+        GVL_PulsePressure.PP_Water_PressureError := rBurstSetpoint_W - GVL_PulsePressure.PP_Water_ActualPressure;
         GVL_PulsePressure.PP_Water_PeakPressure := rBurstPeak_W;
         GVL_PulsePressure.PP_Water_BurstPhase := INT_TO_REAL(iBurstPhase_W);
     ELSE
         rUTotal_W := 0.0;
     END_IF
 
-    // ==================== 油路爆破 ====================
+    // ==================== 油路爆破（多段保压）====================
     IF bOilActive THEN
         rBurstRate1_O := GVL_PulsePressure.PP_Oil_RiseRate;
         IF rBurstRate1_O <= 0.0 THEN
             rBurstRate1_O := 0.01;
         END_IF
 
+        iHoldCount_O := REAL_TO_INT(GVL_PulsePressure.PP_Oil_BurstHoldCount);
+        IF iHoldCount_O < 1 OR iHoldCount_O > 10 THEN
+            iHoldCount_O := 1;
+            rEffHoldP_O[1] := GVL_PulsePressure.PP_Oil_BurstPressure;
+            rEffHoldT_O[1] := GVL_PulsePressure.PP_Oil_HoldTime;
+        ELSE
+            FOR iSegK := 1 TO iHoldCount_O DO
+                rEffHoldP_O[iSegK] := GVL_PulsePressure.PP_Oil_BurstHoldP[iSegK];
+                rEffHoldT_O[iSegK] := GVL_PulsePressure.PP_Oil_BurstHoldT[iSegK];
+            END_FOR
+        END_IF
+
         CASE iBurstPhase_O OF
             0:
-                rBurstSetpoint_O := rBurstSetpoint_O + rBurstRate1_O * rDt;
-                IF rBurstSetpoint_O >= GVL_PulsePressure.PP_Oil_BurstPressure THEN
-                    rBurstSetpoint_O := GVL_PulsePressure.PP_Oil_BurstPressure;
+                rTargetSeg_O := rEffHoldP_O[iHoldIdx_O];
+                IF rBurstSetpoint_O < rTargetSeg_O THEN
+                    rBurstSetpoint_O := rBurstSetpoint_O + rBurstRate1_O * rDt;
+                    IF rBurstSetpoint_O >= rTargetSeg_O THEN
+                        rBurstSetpoint_O := rTargetSeg_O;
+                        rBurstHoldTimer_O := 0.0;
+                        iBurstPhase_O := 1;
+                    END_IF
+                ELSIF rBurstSetpoint_O > rTargetSeg_O THEN
+                    rBurstSetpoint_O := rBurstSetpoint_O - rBurstRate1_O * rDt;
+                    IF rBurstSetpoint_O <= rTargetSeg_O THEN
+                        rBurstSetpoint_O := rTargetSeg_O;
+                        rBurstHoldTimer_O := 0.0;
+                        iBurstPhase_O := 1;
+                    END_IF
+                ELSE
                     rBurstHoldTimer_O := 0.0;
                     iBurstPhase_O := 1;
                 END_IF
             1:
+                rBurstSetpoint_O := rEffHoldP_O[iHoldIdx_O];
                 rBurstHoldTimer_O := rBurstHoldTimer_O + rDt;
-                IF rBurstHoldTimer_O >= GVL_PulsePressure.PP_Oil_HoldTime THEN
-                    iBurstPhase_O := 2;
+                IF rBurstHoldTimer_O >= rEffHoldT_O[iHoldIdx_O] THEN
+                    IF iHoldIdx_O < iHoldCount_O THEN
+                        iHoldIdx_O := iHoldIdx_O + 1;
+                        iBurstPhase_O := 0;
+                    ELSE
+                        iBurstPhase_O := 2;
+                    END_IF
                 END_IF
             2:
                 rBurstSetpoint_O := rBurstSetpoint_O + rBurstRate1_O * rDt;
@@ -561,14 +662,28 @@ IF bBurstMode THEN
             END_IF
         END_IF
 
-        rPrePressErr_O := rBurstSetpoint_O - GVL_PulsePressure.PP_Oil_ActualPressure;
-        rUTotal_O := rPrePressKp * rPrePressErr_O;
+        IF iBurstPhase_O = 1 THEN
+            rKiEff_O := GVL_PulsePressure.PP_Oil_Burst_Ki;
+        ELSE
+            rKiEff_O := 0.0;
+        END_IF
+        fbBurstPID_O(
+            bEnable        := TRUE,
+            rError         := rBurstSetpoint_O - GVL_PulsePressure.PP_Oil_ActualPressure,
+            rDt            := rDt,
+            bReset         := FALSE,
+            bResetIntegral := (iBurstPhase_O <> iBurstPhasePrev_O),
+            rPID_Kp        := GVL_PulsePressure.PP_Oil_Burst_Kp,
+            rPID_Ki        := rKiEff_O
+        );
+        iBurstPhasePrev_O := iBurstPhase_O;
+        rUTotal_O := fbBurstPID_O.rOutput;
         IF rUTotal_O > 10.0 THEN rUTotal_O := 10.0; END_IF
         IF rUTotal_O < -10.0 THEN rUTotal_O := -10.0; END_IF
         PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O * 10;
 
         GVL_PulsePressure.PP_Oil_SetpointPressure := rBurstSetpoint_O;
-        GVL_PulsePressure.PP_Oil_PressureError := rPrePressErr_O;
+        GVL_PulsePressure.PP_Oil_PressureError := rBurstSetpoint_O - GVL_PulsePressure.PP_Oil_ActualPressure;
         GVL_PulsePressure.PP_Oil_PeakPressure := rBurstPeak_O;
         GVL_PulsePressure.PP_Oil_BurstPhase := INT_TO_REAL(iBurstPhase_O);
     ELSE
