@@ -13,7 +13,8 @@ VAR_INPUT
 	rGroupW : REAL := 0.5; // 12 段组级修正权重（解决 bin 钳位时溢出不转移问题）；0=禁用
 	bAlphaEnable : BOOL := TRUE; // α 自学习使能（正弦/三角/梯形/矩形）
 	bPlatCorrEnable : BOOL := TRUE; // 平台 2 段幅值修正使能（仅梯形/矩形生效）
-	nWarmupCycles : INT := 3; // 暖机周期数：前N个周期透传不修正，同时完成波形类型检测
+	iWaveType : INT;            // 波形类型（与 PP_*_WaveType / fbWaveGen 对齐）：0=正弦 1=方波 2=三角 3=梯形 4=自定义
+	nWarmupCycles : INT := 3; // 暖机周期数：前N个周期透传不修正，等待 vMin/vMax 极值收敛
 END_VAR
 VAR_OUTPUT
 	rOutput : REAL; // 修正量 = rVirtualTarget - rTargetRaw (MPa)
@@ -37,9 +38,7 @@ VAR_OUTPUT
 	rPlatBotB : REAL;
 	rPlatTopA : REAL;
 	rPlatTopB : REAL;
-	nWaveType : INT := 0; // 0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波
-	rFlatFrac : REAL;
-	rSymFrac : REAL;
+	nWaveType : INT := 0; // 内部使用波形分类：1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波（由 iWaveType 映射）
 	nAuthStatus : INT; // 鉴权状态 0=未检查 1=授权 2=未授权 3=读序列号失败
 END_VAR
 VAR
@@ -124,10 +123,6 @@ VAR
 	rNorm : REAL;
 	rLimit : REAL;
 	rBinTotal : REAL;
-	iNearExtCount : INT; // 波形检测
-	iTargetAboveMidCount : INT;
-	iTotalDetectCount : INT;
-	bWaveDetected : BOOL;
 	// --- 任意波（nWaveType=5）逐点 ILC 内部状态 ---
 	rCorrTable5 : ARRAY[0..999] OF REAL;  // 学到的逐点加性修正量 (MPa)
 	rErrSum5    : ARRAY[0..999] OF REAL;  // 本周期各点误差累加
@@ -166,9 +161,6 @@ VAR CONSTANT
 	PLAT_CORR_DECAY   : REAL := 0.9;     // 跳过学习时的修正衰减系数
 	TWO_PI            : REAL := 6.283185307;
 	CYCLES_PER_UPDATE : INT  := 2;
-	FLAT_THR_TRI      : REAL := 0.15;
-	FLAT_THR_SIN      : REAL := 0.40;
-	FLAT_THR_TRAP     : REAL := 0.70;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
 	// --- 任意波 (nWaveType=5) 逐点 ILC ---
 	POINTS_MAX        : INT  := 1000;    // 逐点表最大容量；iPointsPerCycle > POINTS_MAX 时该分支降级透传
@@ -215,6 +207,23 @@ IF NOT bAuthorized THEN
 END_IF
 
 // ============================================================
+// 波形类型映射：上位机直接指定，FB 内部不做自动识别
+// 入参 iWaveType（外部约定，与 PP_*_WaveType / fbWaveGen 对齐）：
+//   0=正弦, 1=方波, 2=三角, 3=梯形, 4=自定义
+// 内部 nWaveType（决定走哪条学习路径）：
+//   1=正弦(8 段 α), 2=三角(8 段 α), 3=梯形(12 段 α + 2 段平台), 4=矩形(同 3), 5=任意波(逐点 ILC)
+// ============================================================
+CASE iWaveType OF
+    0:  nWaveType := 1;
+    1:  nWaveType := 4;
+    2:  nWaveType := 2;
+    3:  nWaveType := 3;
+    4:  nWaveType := 5;
+ELSE
+    nWaveType := 1; // 未知类型按正弦处理（兜底）
+END_CASE
+
+// ============================================================
 // 复位 / 禁用
 // ============================================================
 IF bReset OR NOT bEnable THEN
@@ -238,13 +247,6 @@ IF bReset OR NOT bEnable THEN
         bVInitialized     := FALSE;
         rActualPrev       := 0.0;
         rTargetPrev       := 0.0;
-        nWaveType              := 0;
-        rFlatFrac              := 0.0;
-        rSymFrac               := 0.0;
-        iNearExtCount          := 0;
-        iTargetAboveMidCount   := 0;
-        iTotalDetectCount      := 0;
-        bWaveDetected          := FALSE;
         // 8 段 α 默认均分
         FOR iBinK := 1 TO 8 DO
             rAlphaCmd[iBinK] := 0.125;
@@ -362,25 +364,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     iIteration := iIterCount;
 
     IF iIterCount <= nWarmupCycles THEN
-        // 暖机末完成波形类型检测
-        IF iIterCount = nWarmupCycles AND NOT bWaveDetected AND iTotalDetectCount > 20 THEN
-            rFlatFrac := INT_TO_REAL(iNearExtCount)        / INT_TO_REAL(iTotalDetectCount);
-            rSymFrac  := INT_TO_REAL(iTargetAboveMidCount) / INT_TO_REAL(iTotalDetectCount);
-            // 先按平台占比判类型；对称性只用于区分正弦/三角
-            // 梯形/矩形即使非对称（底平 ≠ 顶平宽度）也走 12 段 α 路径
-            IF rFlatFrac > FLAT_THR_TRAP THEN
-                nWaveType := 4;       // 矩形
-            ELSIF rFlatFrac > FLAT_THR_SIN THEN
-                nWaveType := 3;       // 梯形（允许非对称）
-            ELSIF rSymFrac < 0.35 OR rSymFrac > 0.65 THEN
-                nWaveType := 5;       // 任意波（无平台且非对称）
-            ELSIF rFlatFrac > FLAT_THR_TRI THEN
-                nWaveType := 1;       // 正弦
-            ELSE
-                nWaveType := 2;       // 三角
-            END_IF
-            bWaveDetected := TRUE;
-        END_IF
+        // 暖机阶段：透传不学习，等待 vMin/vMax 极值收敛
         nUpdateCount  := 0;
         rPeakErrSum   := 0.0;
         rValleyErrSum := 0.0;
@@ -621,17 +605,6 @@ IF rActual    < rActualMin THEN rActualMin := rActual;    END_IF
 
 rErrorSum2  := rErrorSum2 + (rTargetRaw - rActual) * (rTargetRaw - rActual);
 iErrorCount := iErrorCount + 1;
-
-// 波形类型检测
-IF NOT bWaveDetected AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
-    iTotalDetectCount := iTotalDetectCount + 1;
-    IF ABS(rTargetRaw - rMidpoint) > 0.9 * rHalfRange THEN
-        iNearExtCount := iNearExtCount + 1;
-    END_IF
-    IF rTargetRaw >= rMidpoint THEN
-        iTargetAboveMidCount := iTargetAboveMidCount + 1;
-    END_IF
-END_IF
 
 // 方向检测
 IF rTargetRaw >= rTargetPrev THEN bTgtRising := TRUE; ELSE bTgtRising := FALSE; END_IF
