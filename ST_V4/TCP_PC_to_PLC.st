@@ -391,9 +391,11 @@ i := i+2;
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
 PRG_DeviceControl.fromPC_HR_Pump2_Frequency_InPut := TwoWord_to_Float.Output;      // 150-151(换热泵2_频率(转速)设定)
 
-//152-169，保留
+// 152-167 保留
 
-
+i := 168;
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Trace_Flag := TwoWord_to_Float.Output;             // 168-169: PC下发波形编号(1=正弦 2=三角 3=梯形 4=矩形 5=任意)
 
 
 i := 170;

@@ -13,7 +13,7 @@ VAR_INPUT
 	rGroupW : REAL := 0.5; // 12 段组级修正权重（解决 bin 钳位时溢出不转移问题）；0=禁用
 	bAlphaEnable : BOOL := TRUE; // α 自学习使能（正弦/三角/梯形/矩形）
 	bPlatCorrEnable : BOOL := TRUE; // 平台 2 段幅值修正使能（仅梯形/矩形生效）
-	iWaveType : INT;            // 波形类型（与 PP_*_WaveType / fbWaveGen 对齐）：0=正弦 1=方波 2=三角 3=梯形 4=自定义
+	iWaveType : INT;            // 波形类型（与 PP_Trace_Flag 对齐）：1=正弦 2=三角 3=梯形 4=矩形 5=任意
 	nWarmupCycles : INT := 3; // 暖机周期数：前N个周期透传不修正，等待 vMin/vMax 极值收敛
 END_VAR
 VAR_OUTPUT
@@ -207,21 +207,16 @@ IF NOT bAuthorized THEN
 END_IF
 
 // ============================================================
-// 波形类型映射：上位机直接指定，FB 内部不做自动识别
-// 入参 iWaveType（外部约定，与 PP_*_WaveType / fbWaveGen 对齐）：
-//   0=正弦, 1=方波, 2=三角, 3=梯形, 4=自定义
-// 内部 nWaveType（决定走哪条学习路径）：
-//   1=正弦(8 段 α), 2=三角(8 段 α), 3=梯形(12 段 α + 2 段平台), 4=矩形(同 3), 5=任意波(逐点 ILC)
+// 波形类型映射：上位机经 PP_Trace_Flag(168-169) 直接指定
+// 入参 iWaveType 与协议对齐，与内部 nWaveType 数值相同：
+//   1=正弦(8 段 α), 2=三角(8 段 α), 3=梯形(12 段 α + 2 段平台),
+//   4=矩形(同 3), 5=任意波(逐点 ILC)
 // ============================================================
-CASE iWaveType OF
-    0:  nWaveType := 1;
-    1:  nWaveType := 4;
-    2:  nWaveType := 2;
-    3:  nWaveType := 3;
-    4:  nWaveType := 5;
+IF iWaveType >= 1 AND iWaveType <= 5 THEN
+    nWaveType := iWaveType;
 ELSE
     nWaveType := 1; // 未知类型按正弦处理（兜底）
-END_CASE
+END_IF
 
 // ============================================================
 // 复位 / 禁用

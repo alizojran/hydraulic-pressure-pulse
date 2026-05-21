@@ -911,7 +911,7 @@ fbILC_W(
     rLearningRate   := GVL_PulsePressure.PP_Water_ILC_LearningRate,
     rAlphaLR        := 0.4,
     bAlphaEnable    := TRUE,
-    iWaveType       := REAL_TO_INT(GVL_PulsePressure.PP_Water_WaveType),
+    iWaveType       := REAL_TO_INT(GVL_PulsePressure.PP_Trace_Flag),
     nWarmupCycles   := 5
 );
 rUIlc_W := fbILC_W.rOutput;
@@ -998,7 +998,7 @@ fbILC_O(
     rLearningRate   := GVL_PulsePressure.PP_Oil_ILC_LearningRate,
     rAlphaLR        := 0.4,
     bAlphaEnable    := TRUE,
-    iWaveType       := REAL_TO_INT(GVL_PulsePressure.PP_Oil_WaveType),
+    iWaveType       := REAL_TO_INT(GVL_PulsePressure.PP_Trace_Flag),
     nWarmupCycles   := 5
 );
 rUIlc_O := fbILC_O.rOutput;

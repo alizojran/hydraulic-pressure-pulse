@@ -110,6 +110,7 @@ VAR_GLOBAL
 	PP_Hydro_PumpStatus : REAL; // 液压泵运行状态
 	PP_Hydro_FilterStatus : REAL; // 过滤器状态
 	PP_Hydro_PumpRunTime : REAL; // 液压泵累计运行时间(h)
+	PP_Trace_Flag : REAL; // PC下发波形编号(ILC学习用) 1=正弦 2=三角 3=梯形 4=矩形 5=任意
 	PP_WaveUpload_Channel : REAL; // 上传目标通道 0=水路 1=油路
 	PP_WaveUpload_NumPoints : REAL; // 波形数据点数 (2~500)
 	PP_WaveUpload_Commit : REAL; // 提交标志: 上升沿触发加载
