@@ -134,6 +134,30 @@ VAR
 	iRight5     : INT;                    // Q-filter 右邻
 	rMeanErr5   : REAL;                   // 平滑后单点误差
 	rCorrLimit5 : REAL;                   // 单点修正限幅
+	// --- 事件型 ILC 状态（nWaveType=5 内部自动升级，V1：A/B 共用 8 段幅值修正）---
+	bEventModeActive  : BOOL;             // 事件型路径生效
+	bSegmentationOK   : BOOL;             // 最近一次切分成功标志（诊断用）
+	nEventCount       : INT;              // 事件数
+	iEventStart       : ARRAY[0..31] OF INT;   // 事件起点索引
+	iEventEnd         : ARRAY[0..31] OF INT;   // 事件终点索引
+	iEventShape       : ARRAY[0..31] OF INT;   // 形状：1=A 钟形, 2=B 单梯形
+	rEventPeak        : ARRAY[0..31] OF REAL;  // 事件峰值（B 型为平台幅值）
+	iEventPlatStart   : ARRAY[0..31] OF INT;   // B 型平台起点（-1 表 A 型）
+	iEventPlatEnd     : ARRAY[0..31] OF INT;   // B 型平台终点
+	iEventClass       : ARRAY[0..31] OF INT;   // 所属类索引
+	iPointToEvent     : ARRAY[0..999] OF INT;  // 反查表：-1=基线段 否则=事件索引
+	// 类学习器
+	nClassCount       : INT;
+	iClassShape       : ARRAY[0..7] OF INT;
+	rClassPeakRef     : ARRAY[0..7] OF REAL;
+	rEvtBinCorr       : ARRAY[0..7, 1..8] OF REAL;  // 每类 8 段幅值修正 (MPa)
+	// 周期内误差累加（按事件实例 × bin）
+	rEvtBinErrSum     : ARRAY[0..31, 1..8] OF REAL;
+	iEvtBinErrCnt     : ARRAY[0..31, 1..8] OF INT;
+	// 事件型运行时临时变量
+	iEvtK, iEvtCls, iEvtBinIdx, iEvtLen, iEvtLocal, iEvtPoolCnt : INT;
+	rEvtFrac, rEvtCorr, rEvtPoolErr, rEvtPoolMean, rEvtBinCorrLim : REAL;
+	iEvtBb : INT;
 	// --- 授权检查内部状态 ---
 	bAuthChecked : BOOL;     // 已检查标志（每次重启检查一次）
 	bAuthorized : BOOL;      // 鉴权通过
@@ -167,6 +191,18 @@ VAR CONSTANT
 	ILC5_Q_W0         : REAL := 0.25;    // Q-filter 三点核：左/右权
 	ILC5_Q_W1         : REAL := 0.50;    // Q-filter 三点核：中心权
 	ILC5_CORR_LIMIT_K : REAL := 0.5;     // 单点修正限幅：K * rPrevTargetRange
+	// --- 事件型 ILC (nWaveType=5 自动升级) ---
+	EVT_MAX_EVENTS    : INT  := 32;       // 最大事件数（超过则切分失败，退回逐点 ILC）
+	EVT_MAX_CLASSES   : INT  := 8;        // 最大类数
+	EVT_THR_UP_K      : REAL := 0.10;     // 进事件阈值：rMin + K · 全程
+	EVT_THR_DN_K      : REAL := 0.04;     // 出事件阈值：rMin + K · 全程
+	EVT_PLAT_FLAT_K   : REAL := 0.025;    // 平台平坦度阈值：窗口 max-min ≤ K · 全程
+	EVT_MIN_PLAT_LEN  : INT  := 8;        // 最短平台点数（短于此值不算平台）
+	EVT_MIN_EVENT_LEN : INT  := 6;        // 最短事件点数
+	EVT_CLASS_GAP_K   : REAL := 0.10;     // 类间距：|peak_a - peak_b| ≤ K · 全程 视为同类
+	EVT_MIN_EVENTS    : INT  := 2;        // 事件数 < 此值则不启用事件型
+	EVT_BIN_CORR_LR   : REAL := 0.15;     // 类 bin 幅值修正学习率
+	EVT_BIN_CORR_LIM_K: REAL := 0.5;      // 类 bin 幅值修正限幅：K · 全程
 END_VAR
 // ============================================================
 // 授权检查（首次调用懒加载，每次启动只查一次）
@@ -261,6 +297,16 @@ IF bReset OR NOT bEnable THEN
             rCorrTable5[iBinK] := 0.0;
         END_FOR
         iPtsPerCycle5Last := 0;
+        // 事件型 ILC：清切分结果 + 类学习器
+        bEventModeActive := FALSE;
+        bSegmentationOK  := FALSE;
+        nEventCount      := 0;
+        nClassCount      := 0;
+        FOR iEvtK := 0 TO EVT_MAX_CLASSES - 1 DO
+            FOR iEvtBb := 1 TO 8 DO
+                rEvtBinCorr[iEvtK, iEvtBb] := 0.0;
+            END_FOR
+        END_FOR
     END_IF
     rOutput        := 0.0;
     rVirtualTarget := 0.0;
@@ -287,6 +333,13 @@ IF bReset OR NOT bEnable THEN
     FOR iBinK := 0 TO POINTS_MAX - 1 DO
         rErrSum5[iBinK] := 0.0;
         iErrCnt5[iBinK] := 0;
+    END_FOR
+    // 事件型 ILC：清周期内 (事件 × bin) 累加器
+    FOR iEvtK := 0 TO EVT_MAX_EVENTS - 1 DO
+        FOR iEvtBb := 1 TO 8 DO
+            rEvtBinErrSum[iEvtK, iEvtBb] := 0.0;
+            iEvtBinErrCnt[iEvtK, iEvtBb] := 0;
+        END_FOR
     END_FOR
     bNewCyclePrev  := FALSE;
     IF NOT bEnable THEN
@@ -444,11 +497,46 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // 任意波 (nWaveType=5) 逐点 ILC: P-type + 三点 Q-filter
+            // 事件型 ILC (nWaveType=5 自动升级)：每类 8 段幅值修正，同类事件实例做样本池化
+            // 模型：rVirtualTarget[i] = rTargetRaw[i] + rEvtBinCorr[class(i), bin(i)]
+            //       周期末对每个类 c，把该类所有事件实例的 bin 误差均值汇总 → 类级更新
+            IF bAlphaEnable AND nWaveType = 5 AND bEventModeActive AND nClassCount > 0 THEN
+                rEvtBinCorrLim := EVT_BIN_CORR_LIM_K * rPrevTargetRange;
+                IF rEvtBinCorrLim < 0.001 THEN rEvtBinCorrLim := 0.001; END_IF
+                FOR iEvtCls := 0 TO nClassCount - 1 DO
+                    FOR iEvtBb := 1 TO 8 DO
+                        rEvtPoolErr := 0.0;
+                        iEvtPoolCnt := 0;
+                        FOR iEvtK := 0 TO nEventCount - 1 DO
+                            IF iEventClass[iEvtK] = iEvtCls AND iEvtBinErrCnt[iEvtK, iEvtBb] > 0 THEN
+                                rEvtPoolErr := rEvtPoolErr
+                                            + rEvtBinErrSum[iEvtK, iEvtBb] / INT_TO_REAL(iEvtBinErrCnt[iEvtK, iEvtBb]);
+                                iEvtPoolCnt := iEvtPoolCnt + 1;
+                            END_IF
+                        END_FOR
+                        IF iEvtPoolCnt > 0 THEN
+                            rEvtPoolMean := rEvtPoolErr / INT_TO_REAL(iEvtPoolCnt);
+                            rEvtBinCorr[iEvtCls, iEvtBb] := rEvtBinCorr[iEvtCls, iEvtBb]
+                                                          + EVT_BIN_CORR_LR * rEvtPoolMean;
+                            IF rEvtBinCorr[iEvtCls, iEvtBb] >  rEvtBinCorrLim THEN rEvtBinCorr[iEvtCls, iEvtBb] :=  rEvtBinCorrLim; END_IF
+                            IF rEvtBinCorr[iEvtCls, iEvtBb] < -rEvtBinCorrLim THEN rEvtBinCorr[iEvtCls, iEvtBb] := -rEvtBinCorrLim; END_IF
+                        END_IF
+                    END_FOR
+                END_FOR
+                // 清本周期 (事件 × bin) 累加器
+                FOR iEvtK := 0 TO nEventCount - 1 DO
+                    FOR iEvtBb := 1 TO 8 DO
+                        rEvtBinErrSum[iEvtK, iEvtBb] := 0.0;
+                        iEvtBinErrCnt[iEvtK, iEvtBb] := 0;
+                    END_FOR
+                END_FOR
+            END_IF
+
+            // 任意波 (nWaveType=5) 逐点 ILC: P-type + 三点 Q-filter（事件型未启用时的回退路径）
             // 模型：rVirtualTarget[i] = rTargetRaw[i] + rCorrTable5[i]
             //       rCorrTable5[i] += LR · Q(mean_err[i])
             // 周期点数变化时清表（结构不可比），iPointsPerCycle > POINTS_MAX 时跳过（降级透传）
-            IF bAlphaEnable AND nWaveType = 5 AND iPointsPerCycle <= POINTS_MAX THEN
+            IF bAlphaEnable AND nWaveType = 5 AND NOT bEventModeActive AND iPointsPerCycle <= POINTS_MAX THEN
                 IF iPointsPerCycle <> iPtsPerCycle5Last THEN
                     FOR iBinK := 0 TO POINTS_MAX - 1 DO
                         rCorrTable5[iBinK] := 0.0;
@@ -699,13 +787,33 @@ IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 AND rHalfRange > 0.001 T
     iFbBin12[iBinK] := iFbBin12[iBinK] + 1;
 END_IF
 
-// --------- 任意波 (nWaveType=5) 逐点误差累加 ---------
+// --------- 任意波 (nWaveType=5) 误差累加 ---------
 IF nWaveType = 5 AND iIterCount >= 1 AND iPointsPerCycle <= POINTS_MAX THEN
-    iIdx5 := iPointIndex;
-    IF iIdx5 < 0                THEN iIdx5 := 0;                  END_IF
-    IF iIdx5 >= iPointsPerCycle THEN iIdx5 := iPointsPerCycle - 1; END_IF
-    rErrSum5[iIdx5] := rErrSum5[iIdx5] + (rTargetRaw - rActual);
-    iErrCnt5[iIdx5] := iErrCnt5[iIdx5] + 1;
+    IF bEventModeActive THEN
+        // 事件型：按 (事件, bin) 累加
+        iEvtK := iPointToEvent[iPointIndex];
+        IF iEvtK >= 0 AND iEvtK < nEventCount THEN
+            iEvtLen := iEventEnd[iEvtK] - iEventStart[iEvtK] + 1;
+            IF iEvtLen >= 1 THEN
+                iEvtLocal := iPointIndex - iEventStart[iEvtK];
+                IF iEvtLocal < 0           THEN iEvtLocal := 0;            END_IF
+                IF iEvtLocal >= iEvtLen    THEN iEvtLocal := iEvtLen - 1;  END_IF
+                rEvtFrac := INT_TO_REAL(iEvtLocal) / INT_TO_REAL(iEvtLen);
+                iEvtBinIdx := REAL_TO_INT(rEvtFrac * 8.0) + 1;
+                IF iEvtBinIdx < 1 THEN iEvtBinIdx := 1; END_IF
+                IF iEvtBinIdx > 8 THEN iEvtBinIdx := 8; END_IF
+                rEvtBinErrSum[iEvtK, iEvtBinIdx] := rEvtBinErrSum[iEvtK, iEvtBinIdx] + (rTargetRaw - rActual);
+                iEvtBinErrCnt[iEvtK, iEvtBinIdx] := iEvtBinErrCnt[iEvtK, iEvtBinIdx] + 1;
+            END_IF
+        END_IF
+    ELSE
+        // 逐点 ILC（回退路径）
+        iIdx5 := iPointIndex;
+        IF iIdx5 < 0                THEN iIdx5 := 0;                  END_IF
+        IF iIdx5 >= iPointsPerCycle THEN iIdx5 := iPointsPerCycle - 1; END_IF
+        rErrSum5[iIdx5] := rErrSum5[iIdx5] + (rTargetRaw - rActual);
+        iErrCnt5[iIdx5] := iErrCnt5[iIdx5] + 1;
+    END_IF
 END_IF
 
 // --------- 平台 2 段反馈累加（按 cmd phase 切割）---------
@@ -748,16 +856,39 @@ IF NOT bVInitialized THEN
     RETURN;
 END_IF
 
-// 任意波 (nWaveType=5)：加性逐点 ILC，跳过 vMin/vMax 仿射重映射
+// 任意波 (nWaveType=5)：事件型 / 逐点 ILC 两条路径，跳过 vMin/vMax 仿射重映射
 // iPointsPerCycle > POINTS_MAX 时降级透传
 IF nWaveType = 5 THEN
-    IF iPointsPerCycle <= POINTS_MAX THEN
+    IF iPointsPerCycle > POINTS_MAX THEN
+        rVirtualTarget := rTargetRaw;
+    ELSIF bEventModeActive THEN
+        // 事件型：查反查表 → 类 → 类的 8 段幅值修正
+        iEvtK := iPointToEvent[iPointIndex];
+        IF iEvtK >= 0 AND iEvtK < nEventCount THEN
+            iEvtCls := iEventClass[iEvtK];
+            iEvtLen := iEventEnd[iEvtK] - iEventStart[iEvtK] + 1;
+            iEvtLocal := iPointIndex - iEventStart[iEvtK];
+            IF iEvtLocal < 0           THEN iEvtLocal := 0;            END_IF
+            IF iEvtLocal >= iEvtLen    THEN iEvtLocal := iEvtLen - 1;  END_IF
+            IF iEvtLen >= 1 THEN
+                rEvtFrac := INT_TO_REAL(iEvtLocal) / INT_TO_REAL(iEvtLen);
+            ELSE
+                rEvtFrac := 0.0;
+            END_IF
+            iEvtBinIdx := REAL_TO_INT(rEvtFrac * 8.0) + 1;
+            IF iEvtBinIdx < 1 THEN iEvtBinIdx := 1; END_IF
+            IF iEvtBinIdx > 8 THEN iEvtBinIdx := 8; END_IF
+            rVirtualTarget := rTargetRaw + rEvtBinCorr[iEvtCls, iEvtBinIdx];
+        ELSE
+            // 基线段：透传
+            rVirtualTarget := rTargetRaw;
+        END_IF
+    ELSE
+        // 逐点 ILC（回退路径）
         iIdx5 := iPointIndex;
         IF iIdx5 < 0                THEN iIdx5 := 0;                  END_IF
         IF iIdx5 >= iPointsPerCycle THEN iIdx5 := iPointsPerCycle - 1; END_IF
         rVirtualTarget := rTargetRaw + rCorrTable5[iIdx5];
-    ELSE
-        rVirtualTarget := rTargetRaw;
     END_IF
     rOutput        := rVirtualTarget - rTargetRaw;
     bNewCyclePrev  := bNewCycle;
@@ -905,4 +1036,229 @@ END_IF
 rOutput := rVirtualTarget - rTargetRaw;
 
 bNewCyclePrev := bNewCycle;
+
+METHOD PUBLIC RunSegmentation : BOOL
+// 事件型 ILC 切分入口：上位机提交波形后由 PRG_PressureControl 调用一次。
+// 成功条件：能切出 ≥ EVT_MIN_EVENTS 个事件、无多平台事件、类数不超出上限。
+// 失败时 bEventModeActive 保持 FALSE，nWaveType=5 自动退回逐点 ILC。
+VAR_INPUT
+    pData : POINTER TO REAL;   // 波形点表指针（PP_WaveUpload_Data）
+    nPoints : INT;             // 点数（2~POINTS_MAX）
+END_VAR
+VAR
+    i, j, k          : INT;
+    rTgt             : REAL;
+    rMinAll, rMaxAll : REAL;
+    rRange           : REAL;
+    rThrUp, rThrDn   : REAL;
+    rFlatThr         : REAL;
+    bInEvent         : BOOL;
+    rWinMax, rWinMin : REAL;
+    iScan            : INT;
+    iPlatS, iPlatE   : INT;
+    rPlatLvl         : REAL;
+    nPlatInEvt       : INT;
+    bMultiPlat       : BOOL;
+    iCls             : INT;
+    rClassGap        : REAL;
+    bExtended        : BOOL;
+END_VAR
+
+// 复位结果
+bEventModeActive := FALSE;
+bSegmentationOK  := FALSE;
+nEventCount      := 0;
+nClassCount      := 0;
+
+IF nPoints < 2 OR nPoints > POINTS_MAX OR pData = 0 THEN
+    RunSegmentation := FALSE;
+    RETURN;
+END_IF
+
+// 1) 扫一遍取全程
+rMinAll := pData[0];
+rMaxAll := pData[0];
+FOR i := 1 TO nPoints - 1 DO
+    rTgt := pData[i];
+    IF rTgt < rMinAll THEN rMinAll := rTgt; END_IF
+    IF rTgt > rMaxAll THEN rMaxAll := rTgt; END_IF
+END_FOR
+rRange := rMaxAll - rMinAll;
+IF rRange < 0.05 THEN
+    // 几乎是直流，没有事件结构可识别
+    RunSegmentation := FALSE;
+    RETURN;
+END_IF
+
+// 2) 双阈值切分事件
+rThrUp   := rMinAll + EVT_THR_UP_K * rRange;
+rThrDn   := rMinAll + EVT_THR_DN_K * rRange;
+rFlatThr := EVT_PLAT_FLAT_K * rRange;
+
+bInEvent := FALSE;
+nEventCount := 0;
+FOR i := 0 TO nPoints - 1 DO
+    rTgt := pData[i];
+    IF NOT bInEvent THEN
+        IF rTgt >= rThrUp AND nEventCount < EVT_MAX_EVENTS THEN
+            bInEvent := TRUE;
+            iEventStart[nEventCount] := i;
+            rEventPeak[nEventCount]  := rTgt;
+        END_IF
+    ELSE
+        IF rTgt > rEventPeak[nEventCount] THEN
+            rEventPeak[nEventCount] := rTgt;
+        END_IF
+        IF rTgt <= rThrDn THEN
+            iEventEnd[nEventCount] := i - 1;
+            IF (iEventEnd[nEventCount] - iEventStart[nEventCount] + 1) >= EVT_MIN_EVENT_LEN THEN
+                nEventCount := nEventCount + 1;
+            END_IF
+            bInEvent := FALSE;
+            IF nEventCount >= EVT_MAX_EVENTS THEN
+                EXIT;
+            END_IF
+        END_IF
+    END_IF
+END_FOR
+// 末尾仍在事件内
+IF bInEvent AND nEventCount < EVT_MAX_EVENTS THEN
+    iEventEnd[nEventCount] := nPoints - 1;
+    IF (iEventEnd[nEventCount] - iEventStart[nEventCount] + 1) >= EVT_MIN_EVENT_LEN THEN
+        nEventCount := nEventCount + 1;
+    END_IF
+END_IF
+
+IF nEventCount < EVT_MIN_EVENTS THEN
+    nEventCount := 0;
+    RunSegmentation := FALSE;
+    RETURN;
+END_IF
+
+// 3) 形状判定：扫每个事件的平台
+FOR k := 0 TO nEventCount - 1 DO
+    nPlatInEvt := 0;
+    iPlatS     := -1;
+    iPlatE     := -1;
+    rPlatLvl   := 0.0;
+    bMultiPlat := FALSE;
+    iScan      := iEventStart[k];
+
+    WHILE iScan + EVT_MIN_PLAT_LEN - 1 <= iEventEnd[k] DO
+        rWinMin := pData[iScan];
+        rWinMax := pData[iScan];
+        FOR j := 1 TO EVT_MIN_PLAT_LEN - 1 DO
+            rTgt := pData[iScan + j];
+            IF rTgt < rWinMin THEN rWinMin := rTgt; END_IF
+            IF rTgt > rWinMax THEN rWinMax := rTgt; END_IF
+        END_FOR
+
+        IF (rWinMax - rWinMin) <= rFlatThr AND rWinMax >= rThrUp THEN
+            // 找到一段平台
+            IF nPlatInEvt = 0 THEN
+                iPlatS   := iScan;
+                iPlatE   := iScan + EVT_MIN_PLAT_LEN - 1;
+                rPlatLvl := (rWinMax + rWinMin) / 2.0;
+                nPlatInEvt := 1;
+                // 向右扩展同一平台
+                bExtended := TRUE;
+                j := iPlatE + 1;
+                WHILE bExtended AND j <= iEventEnd[k] DO
+                    rTgt := pData[j];
+                    IF ABS(rTgt - rPlatLvl) <= rFlatThr THEN
+                        iPlatE := j;
+                        j := j + 1;
+                    ELSE
+                        bExtended := FALSE;
+                    END_IF
+                END_WHILE
+                iScan := iPlatE + 1;
+            ELSE
+                // 出现第二段平台 → 多平台
+                bMultiPlat := TRUE;
+                EXIT;
+            END_IF
+        ELSE
+            iScan := iScan + 1;
+        END_IF
+    END_WHILE
+
+    IF bMultiPlat THEN
+        // V1 不支持多平台事件：整个切分作废，退回逐点 ILC
+        nEventCount := 0;
+        RunSegmentation := FALSE;
+        RETURN;
+    END_IF
+
+    IF nPlatInEvt = 1 THEN
+        iEventShape[k]     := 2;        // B: 单梯形
+        iEventPlatStart[k] := iPlatS;
+        iEventPlatEnd[k]   := iPlatE;
+        // B 型用平台幅值替代峰值（更稳，不受过冲影响）
+        rEventPeak[k]      := rPlatLvl;
+    ELSE
+        iEventShape[k]     := 1;        // A: 钟形
+        iEventPlatStart[k] := -1;
+        iEventPlatEnd[k]   := -1;
+    END_IF
+END_FOR
+
+// 4) 分类：(shape, peak 桶) 相同 → 同类
+rClassGap   := EVT_CLASS_GAP_K * rRange;
+nClassCount := 0;
+FOR k := 0 TO nEventCount - 1 DO
+    iCls := -1;
+    FOR j := 0 TO nClassCount - 1 DO
+        IF iClassShape[j] = iEventShape[k]
+        AND ABS(rClassPeakRef[j] - rEventPeak[k]) <= rClassGap THEN
+            iCls := j;
+            EXIT;
+        END_IF
+    END_FOR
+    IF iCls < 0 THEN
+        IF nClassCount >= EVT_MAX_CLASSES THEN
+            // 类爆掉：切分作废
+            nEventCount := 0;
+            nClassCount := 0;
+            RunSegmentation := FALSE;
+            RETURN;
+        END_IF
+        iCls := nClassCount;
+        iClassShape[iCls]   := iEventShape[k];
+        rClassPeakRef[iCls] := rEventPeak[k];
+        // 新类的 8 段修正归零（旧波形的学习作废）
+        FOR j := 1 TO 8 DO
+            rEvtBinCorr[iCls, j] := 0.0;
+        END_FOR
+        nClassCount := nClassCount + 1;
+    END_IF
+    iEventClass[k] := iCls;
+END_FOR
+
+// 5) 建反查表
+FOR i := 0 TO nPoints - 1 DO
+    iPointToEvent[i] := -1;
+END_FOR
+FOR k := 0 TO nEventCount - 1 DO
+    FOR i := iEventStart[k] TO iEventEnd[k] DO
+        iPointToEvent[i] := k;
+    END_FOR
+END_FOR
+
+// 6) 切换到事件模式；清旧的逐点 ILC 表和事件累加器，避免遗留补偿干扰
+FOR i := 0 TO POINTS_MAX - 1 DO
+    rCorrTable5[i] := 0.0;
+END_FOR
+iPtsPerCycle5Last := 0;
+FOR k := 0 TO EVT_MAX_EVENTS - 1 DO
+    FOR j := 1 TO 8 DO
+        rEvtBinErrSum[k, j] := 0.0;
+        iEvtBinErrCnt[k, j] := 0;
+    END_FOR
+END_FOR
+
+bSegmentationOK  := TRUE;
+bEventModeActive := TRUE;
+RunSegmentation  := TRUE;
+END_METHOD
 END_FUNCTION_BLOCK

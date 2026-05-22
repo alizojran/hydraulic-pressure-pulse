@@ -139,9 +139,18 @@ IF GVL_PulsePressure.PP_WaveUpload_Commit = 1.0 AND NOT bCommitPrev THEN
                 pData   := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
                 nPoints := nPts
             );
+            // 事件型 ILC 切分（nWaveType=5 时自动接管；失败则退回逐点 ILC）
+            fbILC_W.RunSegmentation(
+                pData   := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
+                nPoints := nPts
+            );
         ELSE
             // 油路
             fbWaveGen_O.LoadCustomWaveform(
+                pData   := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
+                nPoints := nPts
+            );
+            fbILC_O.RunSegmentation(
                 pData   := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
                 nPoints := nPts
             );
