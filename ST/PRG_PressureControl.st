@@ -7,18 +7,13 @@ VAR
 	bCmdChanged : BOOL; // 命令变化标志
 	rDt : REAL := 0.001; // 控制周期 1ms
 	fbWaveGen_O : FB_WaveformGen;
-	fbMFF_O : FB_ModelFeedforward;
 	fbPID_O : FB_PID;
 	fbILC_O : FB_ILC;
-	rVTotal_O : REAL; // 油路总容积
-	rPs_Pa : REAL; // 供油压力 (Pa)
-	rBetaE : REAL; // 体积弹性模量 (Pa) — RunOilChannel 内联后提到主 VAR
-	rCLeak : REAL; // 泄漏系数 — RunOilChannel 内联后提到主 VAR
-	rError_O : REAL; // 油路跟踪误差
-	rUTotal_O : REAL; // 油路总控制量
-	rUMff_O : REAL;
-	rUIlc_O : REAL;
+	rError_O : REAL; // 油路跟踪误差 (基于 ILC 修正后的目标, MPa)
+	rUTotal_O : REAL; // 油路总控制量 (V, 当前就是 PID 输出)
 	rUPid_O : REAL; // PID 反馈输出 (V)
+	rIlcCorrection_O : REAL; // ILC 学到的指令修正量 (MPa)
+	rTargetCorrected_O : REAL; // ILC 修正后的虚拟目标 = rTarget + rIlcCorrection_O (MPa)
 	rStopRampKp : REAL := 2.0; // 停止斜坡比例增益 (V/MPa)
 	rStopRampErr_O : REAL; // 停止斜坡跟踪误差 (MPa)
 	rFlushTimer : REAL; // 冲洗排气计时器(s)
@@ -29,7 +24,6 @@ VAR
 	rActualPMin_O : REAL; // 油路实际PMin
 	rStopRampRate : REAL := 5.0; // 卸压速率 (MPa/s)
 	bOilCycleResetPrev : BOOL; // 油路循环清零上升沿检测
-	nMffLeadSteps : INT; // MFF超前步数(上位机设置)
 	Oil_Pressure_Filter : PWControl.LowPassFilter_R;
 	PP_Oil_ActualPressure : REAL;
 END_VAR
@@ -72,12 +66,10 @@ iCmdPrev := iCmd;
 IF bCmdChanged THEN
     // 进入冲洗或运行前复位所有控制器 (原 InitializeControllers 方法)
     // - fbWaveGen_O 清相位累加器、计数器
-    // - fbMFF_O bEnable:=FALSE 清内部状态, 下个扫描重新使能
     // - fbPID_O 清积分、微分
     // - fbILC_O 清学习历史
     IF iCmd = 1 OR iCmd = 2 THEN
         fbWaveGen_O(bReset := TRUE);
-        fbMFF_O(bEnable := FALSE);
         fbPID_O(bReset := TRUE);
         fbILC_O(bReset := TRUE);
         rPeakPressure_O := 0.0;
@@ -111,17 +103,6 @@ END_IF
 // ============================================================
 
 
-
-// ============================================================
-// 计算系统参数
-// 供油压力的单位换算: MPa → Pa，并设置安全下限
-// 总容积 = 基础容积 + 被试件容积，并设置安全下限
-// ============================================================
-rPs_Pa := GVL_PulsePressure.PP_Hydro_WorkingPressure * 1.0E6;
-IF rPs_Pa < 1.0E6 THEN rPs_Pa := 35.0E6; END_IF  // 默认35MPa
-
-rVTotal_O := GVL_PulsePressure.PP_Oil_VBase + GVL_PulsePressure.PP_Oil_VSpecimen;
-IF rVTotal_O < 1.0E-6 THEN rVTotal_O := 0.7E-3; END_IF  // 默认0.7L
 
 // ============================================================
 // 计算实际PMin（直接使用上位机设定值，0即为0MPa）
@@ -181,13 +162,7 @@ CASE iState OF
     bRunning := TRUE;
     GVL_PulsePressure.PP_SysState := 3.0;  // 运行
 
-    // ==================== 油路控制 (原 RunOilChannel 内联) ====================
-
-    // 读取系统参数 (带默认值保护)
-    rBetaE := GVL_PulsePressure.PP_Sys_BetaE;
-    IF rBetaE < 1.0E6 THEN rBetaE := 1.4E9; END_IF
-    rCLeak := GVL_PulsePressure.PP_Sys_CLeak;
-    IF rCLeak < 0.0 THEN rCLeak := 1.0E-12; END_IF
+    // ==================== 油路控制 (ILC 修指令 + PID 反馈) ====================
 
     // ---- 1. 波形生成 (含 ARP1383C 误差包络) ----
     fbWaveGen_O(
@@ -204,7 +179,7 @@ CASE iState OF
         rLowDwellPct  := GVL_PulsePressure.PP_Oil_LowDwellPct,
         rDt           := rDt,
         bReset        := FALSE,
-        nMffLeadSteps := 120,
+        nMffLeadSteps := 0,    // 已移除 MFF, 不再需要超前相位
         rEnvPctP      := GVL_PulsePressure.PP_Oil_EnvPctP,
         rEnvPctT      := GVL_PulsePressure.PP_Oil_EnvPctT
     );
@@ -229,34 +204,13 @@ CASE iState OF
         rPeakPressure_O := GVL_PulsePressure.PP_Oil_ActualPressure;
     END_IF
 
-    // ---- 2. 跟踪误差 ----
-    rError_O := fbWaveGen_O.rTarget - GVL_PulsePressure.PP_Oil_ActualPressure;
-    GVL_PulsePressure.PP_Oil_PressureError := rError_O;
-
-    // ---- 3. 模型前馈 (用超前相位让阀提前响应) ----
-    fbMFF_O(
-        bEnable        := TRUE,
-        rTargetMPa     := fbWaveGen_O.rTargetLead,
-        rTargetPrevMPa := fbWaveGen_O.rTargetLeadPrev,
-        rDt            := rDt,
-        rBetaE         := rBetaE,
-        rVTotal        := rVTotal_O,
-        rPs            := rPs_Pa,
-        rCLeak         := rCLeak,
-        rValveQnom     := GVL_PulsePressure.PP_Oil_ValveQnom,
-        rValveDPnom    := GVL_PulsePressure.PP_Oil_ValveDPnom,
-        rValveUmax     := GVL_PulsePressure.PP_Oil_ValveUmax,
-        iValveDynMode  := REAL_TO_INT(GVL_PulsePressure.PP_Oil_ValveDynMode),
-        rValveDynParam := GVL_PulsePressure.PP_Oil_ValveDynParam
-    );
-    rUMff_O := fbMFF_O.rOutput;
-    GVL_PulsePressure.PP_Oil_MFF_Output := rUMff_O;
-    GVL_PulsePressure.PP_Oil_Kv         := fbMFF_O.rKv_Calc;
-    GVL_PulsePressure.PP_Oil_TauValve   := fbMFF_O.rTauValve_Calc;
-
-    // ---- 4. ILC 前馈 ----
+    // ---- 2. ILC 指令修正 (MPa 域) ----
+    // 新架构: ILC 不再作为电压前馈分量, 而是学习对目标指令本身的修正量,
+    // 然后 PID 跟踪修正后的目标. 这样:
+    //   - 单位一致: rOutput 是 MPa 级修正, 加到 rTarget (MPa) 上
+    //   - 物理意义清晰: 学到的是 "为了让实际压力达到 rTarget, 阀控制器应该追的虚拟目标"
+    //   - 闭环稳定性由 PID 单独保证, ILC 只是循环间慢学习
     // nWaveType 与 FB_WaveformGen 同编码: 0=正弦 / 1=梯形 / 2=水锤波
-    // 水锤波 (=2) 走 3 级端点学习 (rVPeak / rVMax / rVMin)
     // 段宽来自 fbWaveGen_O 已归一化的 rSegRise / rSegRing / rSegHold / rSegFall
     fbILC_O(
         bEnable         := (GVL_PulsePressure.PP_Oil_ILC_Enable >= 0.5),
@@ -275,11 +229,16 @@ CASE iState OF
         rWHHoldFrac     := fbWaveGen_O.rSegHold,
         rWHFallFrac     := fbWaveGen_O.rSegFall
     );
-    rUIlc_O := fbILC_O.rOutput;
-    GVL_PulsePressure.PP_Oil_ILC_Output    := rUIlc_O;
+    rIlcCorrection_O := fbILC_O.rOutput;                                 // MPa
+    rTargetCorrected_O := fbWaveGen_O.rTarget + rIlcCorrection_O;        // MPa
+    GVL_PulsePressure.PP_Oil_ILC_Output    := rIlcCorrection_O;
     GVL_PulsePressure.PP_Oil_ILC_Iteration := INT_TO_REAL(fbILC_O.iIteration);
 
-    // ---- 5. PID 反馈 ----
+    // ---- 3. 跟踪误差 (基于 ILC 修正后的目标) ----
+    rError_O := rTargetCorrected_O - GVL_PulsePressure.PP_Oil_ActualPressure;
+    GVL_PulsePressure.PP_Oil_PressureError := rError_O;
+
+    // ---- 4. PID 反馈 ----
     fbPID_O(
         bEnable := TRUE,
         rError  := rError_O,
@@ -293,8 +252,8 @@ CASE iState OF
     GVL_PulsePressure.PP_Oil_PID_Output   := rUPid_O;
     GVL_PulsePressure.PP_Oil_PID_Integral := fbPID_O.rPID_I;
 
-    // ---- 6. MFF + ILC + PID 三环复合 ----
-    rUTotal_O := rUMff_O + rUIlc_O + rUPid_O;
+    // ---- 5. 阀控电压 = PID 输出 (无 MFF 前馈) ----
+    rUTotal_O := rUPid_O;
     IF rUTotal_O >  10.0 THEN rUTotal_O :=  10.0; END_IF
     IF rUTotal_O < -10.0 THEN rUTotal_O := -10.0; END_IF
 
