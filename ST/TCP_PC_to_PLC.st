@@ -173,7 +173,19 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Oil_ILC_LearningRate := TwoWord_to_Float.Output;   // 114-115: ILC 学习率(0~1)
 i := i + 2;
 
-// 116-127: 保留 (6 vars reserved)
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_PID_Kp := TwoWord_to_Float.Output;             // 116-117: PID 比例增益 Kp (V/MPa)
+i := i + 2;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_PID_Ki := TwoWord_to_Float.Output;             // 118-119: PID 积分增益 Ki (V/MPa/s)
+i := i + 2;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_PID_Kd := TwoWord_to_Float.Output;             // 120-121: PID 微分增益 Kd (V·s/MPa)
+i := i + 2;
+
+// 122-127: 保留 (3 vars reserved)
 
 
 // ===== [E] 液压站参数 (128-159) =====

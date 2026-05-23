@@ -342,7 +342,22 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 210-211: 包络时间容差 (回读)
 j := j + 2;
 
-// 212-223: 保留 (6 vars reserved)
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_PID_Kp);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 212-213: PID Kp (回读)
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_PID_Ki);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 214-215: PID Ki (回读)
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_PID_Kd);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 216-217: PID Kd (回读)
+j := j + 2;
+
+// 218-223: 保留 (3 vars reserved)
 
 
 // ===== [F] 系统诊断 (224-255) =====
