@@ -128,7 +128,17 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 50-51: 本次脉冲峰值(MPa)
 j := j + 2;
 
-// 52-95: 保留 (22 vars reserved)
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_TargetUpper);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 52-53: ARP1383C 上包络(MPa)
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_TargetLower);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 54-55: ARP1383C 下包络(MPa)
+j := j + 2;
+
+// 56-95: 保留 (20 vars reserved)
 
 
 // ===== [C] 油路控制分量 (96-127) =====
@@ -322,7 +332,17 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 206-207: ILC 学习率 (回读)
 j := j + 2;
 
-// 208-223: 保留 (8 vars reserved)
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_EnvPctP);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 208-209: 包络压力容差 (回读)
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_EnvPctT);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 210-211: 包络时间容差 (回读)
+j := j + 2;
+
+// 212-223: 保留 (6 vars reserved)
 
 
 // ===== [F] 系统诊断 (224-255) =====

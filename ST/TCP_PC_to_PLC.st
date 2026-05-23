@@ -119,7 +119,15 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Oil_CycleReset := TwoWord_to_Float.Output;         // 72-73: 循环计数清零命令
 i := i + 2;
 
-// 74-95: 保留 (11 vars reserved)
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_EnvPctP := TwoWord_to_Float.Output;            // 74-75: 包络压力容差 ×PMax (默认 0.05)
+i := i + 2;
+
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_EnvPctT := TwoWord_to_Float.Output;            // 76-77: 包络时间容差 ×周期 (默认 0.10)
+i := i + 2;
+
+// 78-95: 保留 (9 vars reserved)
 
 
 // ===== [D] 油路 MFF 参数 (96-127) =====

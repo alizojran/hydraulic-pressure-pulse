@@ -62,6 +62,10 @@ VAR_GLOBAL
 	PP_Oil_Frequency_FB : REAL; // 油路实际频率回读(Hz)
 	PP_Oil_WavePhase : REAL; // 油路波形相位角(°)
 	PP_Oil_PeakPressure : REAL; // 油路本次脉冲峰值压力(MPa)
+	PP_Oil_TargetUpper : REAL; // 油路 ARP1383C 上包络 (MPa) — 实际压力允许上限
+	PP_Oil_TargetLower : REAL; // 油路 ARP1383C 下包络 (MPa) — 实际压力允许下限
+	PP_Oil_EnvPctP : REAL; // ARP1383C 包络压力容差 ×PMax (默认 0.05 = 5%)
+	PP_Oil_EnvPctT : REAL; // ARP1383C 包络时间容差 ×周期 (默认 0.10 = 10%)
 	PP_Oil_MFF_Output : REAL; // 油路模型前馈输出(V)
 	PP_Oil_ILC_Output : REAL; // 油路ILC学习输出(V)
 	PP_Oil_ILC_Iteration : REAL; // 油路ILC当前迭代次数
