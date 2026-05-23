@@ -85,10 +85,10 @@ IF bCmdChanged THEN
             IF rFlushOutput > 5.0 THEN rFlushOutput := 5.0; END_IF
             rFlushTimer := 0.0;
             iState := 1;
-        2: // 运行（自动序列：油缸检查→预加压→运行）
+        2: // 运行（自动序列：油缸检查→运行；不做预加压）
 		    rFlushTimer := 0.0;
             InitializeControllers();
-            iState := 2;  // 先进入预加压，内部自动推进到运行
+            iState := 2;  // 先进入油缸到位检查，到位后自动推进到运行
         3: // 停止
             rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
             iState := 4;
@@ -187,32 +187,21 @@ CASE iState OF
     END_IF
 *)
 // ------------------------------------------------------------
-// 状态2: 预加压 — 自动序列：检查油缸到位→预加压→自动进入运行
-// 油缸到位条件：位移 < 2.0mm
-// 预加压到位条件：误差 < 0.2MPa，到位后自动推进到状态3(运行)
+// 状态2: 等待油缸到位 — 不做预加压，到位后直接进入运行
+// 油缸到位条件：位移 < 30.0mm
+// 未到位时反向驱动 -5V，让隔离缸回到测试起始位置
 // ------------------------------------------------------------
 2:
     bRunning := TRUE;
-    GVL_PulsePressure.PP_SysState := 2.0;  // 预加压
+    GVL_PulsePressure.PP_SysState := 2.0;  // 等待油缸到位
 
     rFlushTimer := rFlushTimer + rDt;
-    // 检查油缸是否到位（< 30.0mm）
     IF rCylinderPos > 30.0 THEN
-        // 油缸未到位，等待，不输出压力控制
+        // 油缸未到位，反向驱动等待
         PWMOTION.FPGAData.Axis1.Output_ManualSet := -5;
     ELSE
-        // 油缸到位，执行预加压
-        rPrePressTarget_O := rActualPMin_O;
-        rPrePressErr_O := rPrePressTarget_O - GVL_PulsePressure.PP_Oil_ActualPressure;
-        rUTotal_O := rPrePressKp * rPrePressErr_O;
-        IF rUTotal_O > 10.0 THEN rUTotal_O := 10.0; END_IF
-        IF rUTotal_O < -10.0 THEN rUTotal_O := -10.0; END_IF
-        PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O * 10;
-
-        // 预加压到位 → 自动进入运行
-        IF ABS(rPrePressErr_O) < 0.2 THEN
-            iState := 3;
-        END_IF
+        // 油缸到位，直接进入运行
+        iState := 3;
     END_IF
 
 // ------------------------------------------------------------
