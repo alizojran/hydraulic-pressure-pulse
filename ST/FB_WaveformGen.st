@@ -231,16 +231,16 @@ CASE iWaveType OF
 
 5:  // ARP1383C Fig.2 水锤波形 (水锤型 / Water Hammer) — 指令面五段
     // 【五段组成 — 全部由用户显式设置，内部归一化为 sum=1】
-    //   rR     快速上升段: PMin → P_overshoot (过冲峰)
-    //   rRing  过冲后稳定段: 指令直接给 PMax (步进回落,快速返回)
+    //   rR     上升段:      指令步进到过冲峰 P_OS (无斜率)
+    //   rRing  过冲后稳定段: 指令步进到 PMax (快速从过冲峰回到正常压力)
     //   rH     保压段:      PMax 平直
-    //   rF     下降段:      PMax → PMin
+    //   rF     下降段:      PMax → PMin (线性，平滑卸压)
     //   rLow   低保持段:    PMin
     //
     // 【对应 ARP1383C 标准】
-    //   起始陡升过 PMax 形成尖峰 (1.0~1.1 P_oper 容差带)
-    //   过冲峰仅在 Rise 段末瞬间出现，指令立刻步进回到 PMax
-    //   实际过冲峰的衰减由控制器跟踪+液压系统自然完成
+    //   指令直接发 P_OS (= PMax × 1+rOvershoot) 形成过冲尖峰
+    //   过冲峰持续 rR% 时间，然后步进回到 PMax (Ring 段)
+    //   实际压力的上升/过冲衰减由控制器跟踪+液压系统自然完成
     //   平直保压区 (rRing + rH) 合计 ≥ 10% 周期
     //   下降至 P_min 并停留至周期末
     //
@@ -280,17 +280,17 @@ CASE iWaveType OF
     rPeakOS := rPMax + rOS * (rPMax - rPMin);
 
     IF rPhase < rR THEN
-        // 快速上升至过冲峰
-        rTarget := rPMin + (rPeakOS - rPMin) * (rPhase / rR);
+        // 上升段: 指令直接步进到过冲峰 P_OS (无斜率)
+        rTarget := rPeakOS;
     ELSIF rPhase < (rR + rRing) THEN
-        // 过冲衰减段: 指令直接给 PMax（快速从过冲峰回到正常压力）
+        // 过冲后稳定段: 指令直接给 PMax (快速从过冲峰回到正常压力)
         // 实际从 P_OS 到 PMax 的过渡由控制器/液压系统自然完成
         rTarget := rPMax;
     ELSIF rPhase < (rR + rRing + rH) THEN
         // 平直保压段
         rTarget := rPMax;
     ELSIF rPhase < (rR + rRing + rH + rF) THEN
-        // 下降段
+        // 下降段 (线性，保持平滑卸压)
         rTarget := rPMax - (rPMax - rPMin) * ((rPhase - rR - rRing - rH) / rF);
     ELSE
         // 低保持段 (rLow 已归一化，与剩余 1 - rR - rRing - rH - rF 相等)
@@ -376,7 +376,7 @@ IF nMffLeadSteps > 0 THEN
     5:  // ARP1383C 水锤波形（公式与主波形相同，使用超前相位）
         // 参数副本 rR/rRing/rH/rF/rLow/rOS/rPeakOS 已在主分支中赋值并归一化
         IF rPhaseLead < rR THEN
-            rTargetLead := rPMin + (rPeakOS - rPMin) * (rPhaseLead / rR);
+            rTargetLead := rPeakOS;
         ELSIF rPhaseLead < (rR + rRing) THEN
             rTargetLead := rPMax;
         ELSIF rPhaseLead < (rR + rRing + rH) THEN
