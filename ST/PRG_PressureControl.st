@@ -9,7 +9,7 @@ VAR
 	rDt : REAL := 0.001; // 控制周期 1ms
 	fbWaveGen_O : FB_WaveformGen;
 	fbMFF_O : FB_ModelFeedforward;
-	fbADRC_O : FB_HydraulicADRC;
+	fbPID_O : FB_PID;
 	fbILC_O : FB_ILC;
 	rVTotal_O : REAL; // 油路总容积
 	rPs_Pa : REAL; // 供油压力 (Pa)

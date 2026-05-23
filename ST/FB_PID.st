@@ -1,6 +1,5 @@
-FUNCTION_BLOCK FB_HydraulicADRC
-// 名称沿用 FB_HydraulicADRC 以保持调用点不变。内部实现已精简为
-// 经典 PID（比例 + 积分抗饱和 + 滤波微分），不再使用 ADRC/ESO。
+FUNCTION_BLOCK FB_PID
+// 经典 PID 控制器：比例 + 积分抗饱和(back-calculation) + 滤波微分。
 VAR_INPUT
 	bEnable : BOOL; // 使能
 	rError : REAL; // 跟踪误差 r - y (MPa)
