@@ -1,11 +1,10 @@
 PROGRAM PRG_PressureControl
 VAR
-	iState : INT := 0; // 0=空闲 1=冲洗排气 2=预加压 3=运行 4=停止中 5=故障
+	iState : INT := 0; // 0=空闲 1=冲洗排气 3=运行 4=停止中 5=故障 (无 2: 直接控制无需预加压/油缸检查)
 	bRunning : BOOL;
 	iCmd : INT; // PC命令号 (0~3)
 	iCmdPrev : INT; // 上一周期命令号（边沿检测用）
 	bCmdChanged : BOOL; // 命令变化标志
-	rCylinderPos : REAL; // 油缸位置(mm)
 	rDt : REAL := 0.001; // 控制周期 1ms
 	fbWaveGen_O : FB_WaveformGen;
 	fbMFF_O : FB_ModelFeedforward;
@@ -31,8 +30,6 @@ VAR
 	rActualPMin_O : REAL; // 油路实际PMin
 	rStopRampRate : REAL := 5.0; // 卸压速率 (MPa/s)
 	bOilCycleResetPrev : BOOL; // 油路循环清零上升沿检测
-	bFlushDirection : BOOL; // 冲洗排气往复方向 FALSE=正向 TRUE=反向
-	rFlushToggleTimer : REAL; // 冲洗排气往复切换计时器(s)
 	nMffLeadSteps : INT; // MFF超前步数(上位机设置)
 	Oil_Pressure_Filter : PWControl.LowPassFilter_R;
 	PP_Oil_ActualPressure : REAL;
@@ -85,10 +82,10 @@ IF bCmdChanged THEN
             IF rFlushOutput > 5.0 THEN rFlushOutput := 5.0; END_IF
             rFlushTimer := 0.0;
             iState := 1;
-        2: // 运行（自动序列：油缸检查→运行；不做预加压）
+        2: // 运行（伺服阀直接控制压力，无需油缸到位检查/预加压）
 		    rFlushTimer := 0.0;
             InitializeControllers();
-            iState := 2;  // 先进入油缸到位检查，到位后自动推进到运行
+            iState := 3;
         3: // 停止
             rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
             iState := 4;
@@ -124,9 +121,6 @@ IF rActualPMin_O >= GVL_PulsePressure.PP_Oil_TargetPressure THEN
     rActualPMin_O := GVL_PulsePressure.PP_Oil_TargetPressure * 0.9;
 END_IF
 
-// 获取油缸位置
-rCylinderPos := GVL_PulsePressure.PP_Oil_CylinderPos;
-
 // ============================================================
 // 状态机
 // ============================================================
@@ -158,52 +152,14 @@ CASE iState OF
         GVL_PulsePressure.PP_FlushTimeRemaining := 0.0;
     END_IF
 
-    // 隔离缸往复运动（10秒切换方向）
-	(*
-    IF rFlushToggleTimer >= 10.0  THEN
-        rFlushToggleTimer := 0.0;
-        bFlushDirection := NOT bFlushDirection;
-    END_IF
-    *)
-    IF  rCylinderPos >= 95.0 AND NOT bFlushDirection THEN
-        bFlushDirection := NOT bFlushDirection;
-    END_IF
+    // 直接伺服阀控制系统: 冲洗排气期间阀口保持小开度排气, 不做油缸往复
+    PWMOTION.FPGAData.Axis1.Output_ManualSet := rFlushOutput * 10;
 
-    IF  rCylinderPos <= 5.0 AND  bFlushDirection THEN
-        bFlushDirection := NOT bFlushDirection;
-    END_IF
-	
-    IF NOT bFlushDirection THEN
-        PWMOTION.FPGAData.Axis1.Output_ManualSet := 5;   // 正向
-    ELSE
-        PWMOTION.FPGAData.Axis1.Output_ManualSet := -5;  // 反向
-    END_IF
-    
-    // 冲洗时间到 → 置就绪标志，通知PC
-	(*
+    // 冲洗时间到 → 置就绪标志，通知 PC 发下一命令
     IF rFlushTimer >= rFlushDuration THEN
         GVL_PulsePressure.PP_FlushTimeRemaining := 0.0;
         GVL_PulsePressure.PP_StateReady := 1.0;
     END_IF
-*)
-// ------------------------------------------------------------
-// 状态2: 等待油缸到位 — 不做预加压，到位后直接进入运行
-// 油缸到位条件：位移 < 30.0mm
-// 未到位时反向驱动 -5V，让隔离缸回到测试起始位置
-// ------------------------------------------------------------
-2:
-    bRunning := TRUE;
-    GVL_PulsePressure.PP_SysState := 2.0;  // 等待油缸到位
-
-    rFlushTimer := rFlushTimer + rDt;
-    IF rCylinderPos > 30.0 THEN
-        // 油缸未到位，反向驱动等待
-        PWMOTION.FPGAData.Axis1.Output_ManualSet := -5;
-    ELSE
-        // 油缸到位，直接进入运行
-        iState := 3;
-    END_IF
-
 // ------------------------------------------------------------
 // 状态3: 运行 — MFF + ILC + PID 复合控制
 // 此状态下执行完整的6步控制流水线:

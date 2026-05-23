@@ -32,15 +32,10 @@ VAR
 	rDeltaP : REAL; // 阀口压差 (Pa)
 	rUff : REAL; // 前馈电压 (V)
 	rDUdt : REAL; // 前馈电压变化率 (V/s)
-	rAreaRatio : REAL; // 面积比 A_iso/A_drive (隔离缸放大倍数)
-	rPOil : REAL; // 油侧压力 (Pa) = P_test × 面积比
 END_VAR
 VAR CONSTANT
 	MIN_DELTA_P : REAL := 1000.0; // 最小压差 (Pa)，防除零
 	OUTPUT_LIMIT : REAL := 9.0; // 前馈输出限幅 (V)
-	AREA_DRIVE : REAL := 0.001527; // 驱动缸有杆腔有效面积 (m²)
-	AREA_ISO : REAL := 0.01227; // 隔离缸活塞面积 (m²)
-	AREA_RATIO : REAL := 8.03; // 面积比 A_iso/A_drive (隔离缸力放大倍数)
 END_VAR
 
 
@@ -108,18 +103,13 @@ rKv_Calc := rKv;
 rTauValve_Calc := rTauValve;
 
 // ============================================================
-// 隔离缸面积比 (固定结构常量)
+// 系统结构: 伺服阀 → 试验腔 (直接控制, 无隔离缸/驱动缸)
 // ============================================================
-// 系统结构: 伺服阀 → 驱动缸(A_drive) → 机械耦合 → 隔离缸(A_iso) → 试验腔
-//
 // 物理关系:
-//   活塞速度: v = Q_valve / A_drive
-//   试验腔体积变化率: dV_test/dt = A_iso × v = AREA_RATIO × Q_valve
-//   压力变化率: dP_test/dt = (βe/V_test) × AREA_RATIO × Q_valve
-//
-// 力平衡(忽略惯性摩擦):
-//   P_oil × A_drive = P_test × A_iso
-//   → P_oil = P_test × AREA_RATIO
+//   阀流量直接进入试验腔, 容积 V_test = rVTotal
+//   压力变化率: dP/dt = (βe / V_test) × (Q_valve - C_leak × P)
+// 阀两侧压差:
+//   ΔP = Ps - |P|   (升压: Ps → P_test; 降压: P_test → 回油)
 //
 
 // 参数保护
@@ -144,29 +134,22 @@ END_IF
 
     rP := rTargetPa;
 
-    // 步骤②: 所需流量 = (dP/dt * V / βe) / AreaRatio + Cleak * P_oil
-    // 【带隔离缸的逆模型推导】
+    // 步骤②: 所需流量 = dP/dt × V / βe + Cleak × P
+    // 【直接伺服阀控制的逆模型推导】
     // 试验腔压力方程:
-    //   dP_test/dt = (βe / V_test) × (A_iso/A_drive) × Q_valve  ... (1')
+    //   dP/dt = (βe / V) × (Q_valve - Cleak × P)         ... (1)
     // 反解阀流量:
-    //   Q_valve = (dP_test/dt × V_test / βe) / (A_iso/A_drive)
-    //           = (dP_test/dt × V_test) / (βe × AreaRatio)       ... (8')
-    // 加上泄漏补偿(泄漏发生在油侧，P_oil = P_test × AreaRatio):
-    //   Q_total = Q_valve + Cleak × P_oil
+    //   Q_valve = dP/dt × V / βe + Cleak × P             ... (2)
     //
-    // 当 AreaRatio=1 时退化为原始公式: Q = dP/dt × V / βe + Cleak × P
-    //
-    rPOil := rP * AREA_RATIO;  // 油侧压力
-    rQRequired := (rDPdt * rVTotal / rBetaE) / AREA_RATIO + rCLeak * rPOil;
+    rQRequired := rDPdt * rVTotal / rBetaE + rCLeak * rP;
 
     // 步骤③: 反解阀控电压 u = Q / (Kv * √ΔP)
-    // 【四通阀压差模型】
-    // 四通对称阀 + 对称缸: 无论升压还是降压，都是从Ps供油驱动活塞运动
-    //   升压(u>0): A口供油→伸出侧有杆腔, B口回油←缩回侧有杆腔 → 活塞伸出 → 隔离活塞排液 → 压力升
-    //   降压(u<0): B口供油→缩回侧有杆腔, A口回油←伸出侧有杆腔 → 活塞缩回 → 隔离活塞吸液 → 压力降
-    // 两个方向ΔP公式相同: ΔP = Ps - P_oil，输出连续无跳变
+    // 【阀压差】
+    //   升压(u>0): 供油 Ps → 试验腔 P, ΔP = Ps - P
+    //   降压(u<0): 试验腔 P → 回油, ΔP ≈ P (实际是 P-P_tank)，回油压力近 0
+    //   统一近似: ΔP = Ps - |P| (升压时严格; 降压时偏保守, 输出连续)
     //
-    rDeltaP := rPs - ABS(rPOil);
+    rDeltaP := rPs - ABS(rP);
     IF rDeltaP < MIN_DELTA_P THEN rDeltaP := MIN_DELTA_P; END_IF
     rUff := rQRequired / (rKv * SQRT(rDeltaP));
 
