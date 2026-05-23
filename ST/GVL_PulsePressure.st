@@ -12,8 +12,7 @@ VAR_GLOBAL
 	PP_Oil_TargetPressure : REAL; // 油路目标峰值压力(MPa) = PMax
 	PP_Oil_MinPressure : REAL; // 油路最低压力(MPa) = PMin
 	PP_Oil_Frequency : REAL; // 油路脉冲频率(Hz)
-	PP_Oil_WaveType : REAL; // 波形类型 0=正弦 1=方波 2=三角 3=梯形 4=自定义 5=ARP1383水锤波
-	PP_Oil_DutyCycle : REAL; // 方波占空比(%)
+	PP_Oil_WaveType : REAL; // 波形类型 0=正弦 3=梯形 5=ARP1383水锤波
 	PP_Oil_RisePct : REAL; // 梯形/水锤波上升段占比
 	PP_Oil_HoldPct : REAL; // 梯形/水锤波保持段占比
 	PP_Oil_FallPct : REAL; // 梯形/水锤波下降段占比
@@ -74,10 +73,6 @@ VAR_GLOBAL
 	PP_Hydro_PumpStatus : REAL; // 液压泵运行状态
 	PP_Hydro_FilterStatus : REAL; // 过滤器状态
 	PP_Hydro_PumpRunTime : REAL; // 液压泵累计运行时间(h)
-	PP_WaveUpload_NumPoints : REAL; // 波形数据点数 (2~500)
-	PP_WaveUpload_Commit : REAL; // 提交标志: 上升沿触发加载
-	PP_WaveUpload_Status : REAL; // 状态回读: 0=空闲 1=已加载 2=错误
-	PP_WaveUpload_Data : ARRAY[0..799] OF REAL; // 波形数据 (MPa)
 	PP_PLC_ScanCycle : REAL; // PLC扫描周期实测值(ms)
 	PP_TCPIP_CommCycle : REAL; // TCP/IP实际通讯周期(ms)
 	PP_PLC_Timestamp_Low : REAL; // PLC时间戳低32位(ms)

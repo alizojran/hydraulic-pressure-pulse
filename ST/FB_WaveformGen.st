@@ -4,8 +4,7 @@ VAR_INPUT
 	rPMin : REAL; // 最低压力 (MPa)
 	rPMax : REAL; // 最高压力 (MPa)
 	rFrequency : REAL; // 脉冲频率 (Hz)
-	iWaveType : INT; // 波形类型 0=正弦 1=方波 2=三角 3=梯形 4=自定义LUT 5=ARP1383水锤波
-	rDutyCycle : REAL; // 方波占空比 (0~1)，默认0.5
+	iWaveType : INT; // 波形类型 0=正弦 3=梯形 5=ARP1383水锤波
 	rRisePct : REAL; // 梯形/水锤波上升段占比，默认0.1
 	rHoldPct : REAL; // 梯形/水锤波保持段占比，默认0.3
 	rFallPct : REAL; // 梯形/水锤波下降段占比，默认0.1
@@ -32,9 +31,6 @@ VAR
 	rTargetLeadLast : REAL; // 超前目标上一步暂存
 	bFirstRun : BOOL := TRUE;
 	iIdxCounter : INT; // 采样点计数器
-	arrLUT : ARRAY[0..1999] OF REAL; // 波形查找表 (MPa)
-	iLutLen : INT; // 有效数据点数
-	bLutValid : BOOL; // LUT数据有效标志
 	rR : REAL; // 上升段占比
 	rH : REAL; // 保持段占比
 	rF : REAL; // 下降段占比
@@ -48,8 +44,6 @@ VAR
 END_VAR
 VAR CONSTANT
 	PI : REAL := 3.14159265358979;
-	RISE_RATIO_SQUARE : REAL := 0.08; // 方波过渡段占比
-	MAX_LUT_POINTS : INT := 2000; // LUT最大点数
 END_VAR
 
 
@@ -78,8 +72,7 @@ END_IF
 // 【每周期采样点数的物理含义】
 // iPointsPerCycle = 1 / (f * dt) 表示一个完整波形周期被分成多少个采样点。
 // 例如 f=1Hz, dt=1ms → iPointsPerCycle = 1000 点/周期。
-// 点数太少会导致波形分辨率不足（如方波变成阶梯），
-// 所以设下限 10 点保证基本波形质量。
+// 点数太少会导致波形分辨率不足，所以设下限 10 点保证基本波形质量。
 iPointsPerCycle := REAL_TO_INT(1.0 / (rFrequency * rDt));
 IF iPointsPerCycle < 10 THEN
     iPointsPerCycle := 10;
@@ -139,55 +132,13 @@ CASE iWaveType OF
     //   即压力在周期起点处变化率为零 → 平滑上升，
     //   不会在波形起始处产生突变的 dP/dt（目标压力变化率），
     //   前馈控制器不需要在起始瞬间提供极大的电压。
-    //   对比 sin: sin(0)=0 但 dP/dφ = PMax-PMin（最大速率），
-    //   起始就有大的 dP/dt，前馈和执行机构承受冲击。
     //
     rTarget := (rPMax + rPMin) / 2.0
                - (rPMax - rPMin) / 2.0 * COS(2.0 * PI * rPhase);
 
-1:  // 方波 (带过渡段)
-    // 【方波过渡段的目的——避免不连续性】
-    // 理想方波在 PMin 和 PMax 之间瞬间跳变，
-    // dP/dt 在跳变点为无穷大，现实中执行器无法跟踪。
-    // 更严重的是: dP/dt = ±∞ 会导致模型前馈 u_ff → ∞，
-    // 控制电压瞬间饱和，系统和执行器承受巨大冲击。
-    //
-    // 过渡段 (RISE_RATIO_SQUARE = 8% 周期) 的作用:
-    //   - 在 PMin→PMax 和 PMax→PMin 的跳变处插入线性过渡，
-    //     将 dP/dt 限制在 (PMax-PMin) / (过渡段时长) 的有限值
-    //   - 过渡段时长 = 0.08 / f，例如 f=1Hz 时 = 80ms
-    //   - 虽然仍有 dP/dt 的阶跃变化（恒斜率），但幅值有限可跟踪
-    //
-    // 四段划分:
-    //   0% ~ 8%:   线性上升 (PMin → PMax)
-    //   8% ~ 50%:  高位保持 (PMax)
-    //   50% ~ 58%: 线性下降 (PMax → PMin)
-    //   58% ~ 100%: 低位保持 (PMin)
-    //
-    IF rPhase < RISE_RATIO_SQUARE THEN
-        rTarget := rPMin + (rPMax - rPMin) * (rPhase / RISE_RATIO_SQUARE);
-    ELSIF rPhase < 0.5 THEN
-        rTarget := rPMax;
-    ELSIF rPhase < (0.5 + RISE_RATIO_SQUARE) THEN
-        rTarget := rPMax - (rPMax - rPMin) * ((rPhase - 0.5) / RISE_RATIO_SQUARE);
-    ELSE
-        rTarget := rPMin;
-    END_IF
-
-2:  // 三角波
-    // 三角波是最简单的分段线性波形，两段等长:
-    //   0% ~ 50%:  线性上升 (PMin → PMax)
-    //   50% ~ 100%: 线性下降 (PMax → PMin)
-    // dP/dt 在过零点有阶跃变化（斜率切换），但幅值恒定有限。
-    IF rPhase < 0.5 THEN
-        rTarget := rPMin + (rPMax - rPMin) * (rPhase / 0.5);
-    ELSE
-        rTarget := rPMax - (rPMax - rPMin) * ((rPhase - 0.5) / 0.5);
-    END_IF
-
 3:  // 梯形波
     // 【梯形波分段计算】
-    // 梯形波是方波的平滑版本，四段组成:
+    // 梯形波四段组成:
     //   rR% 上升段: PMin 线性升至 PMax
     //   rH% 保持段: 停留在 PMax
     //   rF% 下降段: PMax 线性降至 PMin
@@ -225,9 +176,6 @@ CASE iWaveType OF
     ELSE
         rTarget := rPMin;
     END_IF
-
-4:  // ★ 自定义波形 — 查表 + 线性插值
-    LutInterpolate();
 
 5:  // ARP1383C Fig.2 水锤波形 (水锤型 / Water Hammer) — 指令面五段
     // 【五段组成 — 全部由用户显式设置，内部归一化为 sum=1】
@@ -340,22 +288,6 @@ IF nMffLeadSteps > 0 THEN
     0:  // 正弦波
         rTargetLead := (rPMax + rPMin) / 2.0
                        - (rPMax - rPMin) / 2.0 * COS(2.0 * PI * rPhaseLead);
-    1:  // 方波
-        IF rPhaseLead < RISE_RATIO_SQUARE THEN
-            rTargetLead := rPMin + (rPMax - rPMin) * (rPhaseLead / RISE_RATIO_SQUARE);
-        ELSIF rPhaseLead < 0.5 THEN
-            rTargetLead := rPMax;
-        ELSIF rPhaseLead < (0.5 + RISE_RATIO_SQUARE) THEN
-            rTargetLead := rPMax - (rPMax - rPMin) * ((rPhaseLead - 0.5) / RISE_RATIO_SQUARE);
-        ELSE
-            rTargetLead := rPMin;
-        END_IF
-    2:  // 三角波
-        IF rPhaseLead < 0.5 THEN
-            rTargetLead := rPMin + (rPMax - rPMin) * (rPhaseLead / 0.5);
-        ELSE
-            rTargetLead := rPMax - (rPMax - rPMin) * ((rPhaseLead - 0.5) / 0.5);
-        END_IF
     3:  // 梯形波
         IF rPhaseLead < rR THEN
             rTargetLead := rPMin + (rPMax - rPMin) * (rPhaseLead / rR);
@@ -365,13 +297,6 @@ IF nMffLeadSteps > 0 THEN
             rTargetLead := rPMax - (rPMax - rPMin) * ((rPhaseLead - rR - rH) / rF);
         ELSE
             rTargetLead := rPMin;
-        END_IF
-    4:  // 自定义波形LUT插值
-        IF bLutValid AND iLutLen >= 2 THEN
-            rTargetLead := LutInterpolateAtPhase(rPhaseLead);
-        ELSE
-            rTargetLead := (rPMax + rPMin) / 2.0
-                           - (rPMax - rPMin) / 2.0 * COS(2.0 * PI * rPhaseLead);
         END_IF
     5:  // ARP1383C 水锤波形（公式与主波形相同，使用超前相位）
         // 参数副本 rR/rRing/rH/rF/rLow/rOS/rPeakOS 已在主分支中赋值并归一化
@@ -401,19 +326,5 @@ END_IF
 rTargetLeadLast := rTargetLead;
 
 iIdxCounter := iIdxCounter + 1;
-
-
-// ============================================================
-// 自定义波形: LUT线性插值
-// ============================================================
-// LUT 存储一个完整周期的压力值 (MPa)，等间距分布
-// 相位 0~1 映射到索引 0~(N-1)，相邻两点线性插值
-//
-// 例: N=2000, phase=0.333
-//   连续索引 = 0.333 * 1999 = 665.667
-//   idx0 = 665, idx1 = 666
-//   frac = 0.667
-//   output = LUT[665] * 0.333 + LUT[666] * 0.667
-// ============================================================
 
 END_FUNCTION_BLOCK

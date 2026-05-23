@@ -28,12 +28,10 @@ VAR
 	rStopRampVal_O : REAL;
 	rActualPMin_O : REAL; // 油路实际PMin
 	rStopRampRate : REAL := 5.0; // 卸压速率 (MPa/s)
-	bCommitPrev : BOOL; // 上升沿检测
 	bOilCycleResetPrev : BOOL; // 油路循环清零上升沿检测
 	bFlushDirection : BOOL; // 冲洗排气往复方向 FALSE=正向 TRUE=反向
 	rFlushToggleTimer : REAL; // 冲洗排气往复切换计时器(s)
 	nMffLeadSteps : INT; // MFF超前步数(上位机设置)
-	nPts : INT; // 波形上传点数
 	Oil_Pressure_Filter : PWControl.LowPassFilter_R;
 	PP_Oil_ActualPressure : REAL;
 END_VAR
@@ -51,27 +49,6 @@ GVL_PulsePressure.PP_Oil_ActualPressure := Oil_Pressure_Filter.out;
 
 //方向系数
 PWMotion.FPGAData.Axis1.OutputCoefficient := 1;
-
-
-// ============================================================
-// 自定义波形上传处理 (任何状态下都执行)
-// 上升沿检测：当Upload_Commit从0→1时触发加载
-// 加载后状态回写：1=成功 2=点数非法
-// ============================================================
-IF GVL_PulsePressure.PP_WaveUpload_Commit = 1.0 AND NOT bCommitPrev THEN
-    nPts := REAL_TO_INT(GVL_PulsePressure.PP_WaveUpload_NumPoints);
-
-    IF nPts >= 2 AND nPts <= 2000 THEN
-        fbWaveGen_O.LoadCustomWaveform(
-            pData   := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
-            nPoints := nPts
-        );
-        GVL_PulsePressure.PP_WaveUpload_Status := 1.0;  // 已加载
-    ELSE
-        GVL_PulsePressure.PP_WaveUpload_Status := 2.0;  // 错误
-    END_IF
-END_IF
-bCommitPrev := (GVL_PulsePressure.PP_WaveUpload_Commit = 1.0);
 
 
 // ============================================================

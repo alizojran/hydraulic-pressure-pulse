@@ -1,10 +1,8 @@
 PROGRAM TCP_PC_to_PLC
 VAR
-	HOLDING_REGISTER AT %IW0 : ARRAY[0..1999] OF WORD; // 上位机写入缓冲区 (扩展至2000支持波形上传)
+	HOLDING_REGISTER AT %IW0 : ARRAY[0..1999] OF WORD; // 上位机写入缓冲区
 	TwoWord_to_Float : PWmotion.TwoWord_to_Float;
-	TwoWord_to_Dint : PWmotion.TwoWord_to_DINT;
 	i : DINT; // 寄存器地址索引（WORD索引）
-	j : INT; // 波形数据循环索引
 END_VAR
 
 // ============================================================
@@ -90,8 +88,7 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Oil_WaveType := TwoWord_to_Float.Output;         // 74-75: 波形类型
 i := i + 2;
 
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_DutyCycle := TwoWord_to_Float.Output;        // 76-77: 方波占空比
+// 76-77: 保留 (原油路方波占空比，V4.x 不再使用)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
@@ -335,56 +332,6 @@ PRG_DeviceControl.fromPC_HR_Pump2_Frequency_InPut := TwoWord_to_Float.Output;   
 
 
 
-i := 170;
-// 170-171: 保留 (原 WaveUpload_Channel，V4.x 仅油路无需通道选择)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_WaveUpload_NumPoints := TwoWord_to_Float.Output;    // 172-173
-// 数据流: PC写入波形点数 → PRG_PressureControl加载时验证(2~2000)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_WaveUpload_Commit := TwoWord_to_Float.Output;       // 174-175
-// 数据流: PC写入提交标志 → PRG_PressureControl上升沿检测触发加载
-
-
-//176-199，保留
-
-
-
-// ============================================================
-// 自定义波形上传区（WORD地址 200–1999）
-// 200-201: 上传目标通道 (0=水路 1=油路)
-// 202-203: 波形数据点数 (2~2000)
-// 204-205: 提交标志 (上升沿触发加载)
-// 206-4205: 波形数据 (最多2000个FLOAT32 = 4000 WORD)
-//
-// FOR循环解析波形数据的原因说明:
-//   波形上传区包含最多2000个REAL值，每个占2个WORD，
-//   总计4000个WORD(地址206~4205)。
-//   如果逐个手写TwoWord_to_Float调用，需要2000行重复代码，
-//   因此使用FOR循环遍历数组索引，将HOLDING_REGISTER中
-//   连续的WORD对转换为REAL并写入PP_WaveUpload_Data数组。
-//
-//   地址计算: 第j个波形数据点的WORD起始地址 = 206 + j*2
-//   - word_low  = HOLDING_REGISTER[206 + j*2]
-//   - word_high = HOLDING_REGISTER[207 + j*2]
-//   这保证了每个REAL的2个WORD是连续的，且REAL之间也是
-//   连续排列的。
-// ============================================================
-i := 200;
-
-
-// 200-1999: 波形数据 (900 × FLOAT32)
-// 使用FOR循环批量解析900个波形数据点
-// 每个数据点占2个WORD，连续排列在HOLDING_REGISTER中
-// 解析后直接写入PP_WaveUpload_Data数组
-
-
-FOR j := 0 TO 799 DO
-    TwoWord_to_Float(word_low := HOLDING_REGISTER[200 + j*2], word_high := HOLDING_REGISTER[201 + j*2]);
-    GVL_PulsePressure.PP_WaveUpload_Data[j] := TwoWord_to_Float.Output;
-END_FOR
+// 170-1999: 保留 (原波形上传 + 自定义波形数据区，V4.x 删除自定义LUT后不再使用)
 
 END_PROGRAM
