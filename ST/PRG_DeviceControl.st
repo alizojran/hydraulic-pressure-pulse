@@ -45,7 +45,6 @@ VAR_INPUT
 	toPC_Pressure_32_02 : REAL; // 压力32.02(to-上位机)
 	toPC_Pressure_32_03 : REAL; // 压力32.03(to-上位机)
 	toPC_Pressure_32_04 : REAL; // 压力32.04(to-上位机)
-	toPC_Pressure_25_01 : REAL; // 压力25.01(to-上位机)
 	toPC_Pressure_26_01 : REAL; // 压力26.01(to-上位机)
 	toPC_Pressure_27_01 : REAL; // 压力27.01(to-上位机)
 	toPC_SMP_Pressure_Feedback : REAL; // 伺服泵_压力反馈(to-上位机)
@@ -92,10 +91,9 @@ PRG_HydraulicUnit_Control(
 	rOUT_2=> toPC_HydraulicUnit_OilLevel , 
 	rOUT_3=> toPC_Pressure_32_01 , 
 	rOUT_4=> toPC_Pressure_32_02 , 
-	rOUT_5=> toPC_Pressure_32_03 , 
-	rOUT_6=> toPC_Pressure_32_04 , 
-	rOUT_7=> toPC_Pressure_25_01 , 
-	rOUT_8=> toPC_Pressure_26_01 , 
+	rOUT_5=> toPC_Pressure_32_03 ,
+	rOUT_6=> toPC_Pressure_32_04 ,
+	rOUT_8=> toPC_Pressure_26_01 ,
 	rOUT_9=> toPC_Pressure_27_01 );
 //------------------液压系统-控制子程序调用------------------//
 

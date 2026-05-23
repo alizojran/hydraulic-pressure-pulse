@@ -41,11 +41,9 @@ INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 6-7: 累计循环�
 j := j + 2;
 
 
-GVL_PulsePressure.PP_RunningMode := GVL_PulsePressure.PP_TestMode ;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_RunningMode);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 8-9: 当前运行模式
+// 8-9: 保留 (原 RunningMode，V4.x 不再使用)
+INPUT_REGISTER[j]   := 0;
+INPUT_REGISTER[j+1] := 0;
 j := j + 2;
 
 // 以下为命令/使能回读：上位机下发的命令和使能信号由PLC回读后打包，
@@ -76,122 +74,12 @@ INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 18-19: 冲洗排�
 j := j + 2;
 
 // ============================================================
-// 【水路实时数据区】（WORD地址 20–49）
-//
-// 本区打包水路压力控制回路的全部实时数据，包括实际压力、
-// 给定压力、压力偏差、控制总输出、比例阀电流、缸体位移、
-// 循环计数、频率/相位/峰值等过程量。
-// V2.0 新增 MFF/ILC/ADRC 控制分量反馈（地址40-49），
-// 用于上位机实时监控复合控制各子算法的独立输出。
-//
-// 转换模式：每个 REAL → 2 WORD（IEEE 754拆字，低字在前高字在后）
-// 地址推进：j 递增 2
-// 回读说明：ControlOutput（26-27）为 MFF+ILC+ADRC 三者叠加后的
-//           最终控制量，上位机可对比总输出与各分量之和验证控制完整性
+// 【水路实时数据区】（WORD 20–49）—— V4.x 起仅油路，水路寄存器保留为0
 // ============================================================
-j := 20;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ActualPressure);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 20-21: 水路实际压力
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_SetpointPressure);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 22-23: 水路给定压力
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_PressureError);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 24-25: 水路压力偏差
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ControlOutput);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 26-27: 水路MFF+ILC+ADRC总输出
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ValveCurrent);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 28-29: 水路比例阀电流
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_CylinderPos);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 30-31: 水路缸体位移
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_CyclesDone);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 32-33: 水路完成循环次数
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_Frequency_FB);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 34-35: 水路实际频率
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_WavePhase);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 36-37: 水路波形相位
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_PeakPressure);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 38-39: 水路峰值压力
-j := j + 2;
-
-// --- V2.0 新增: MFF/ILC/ADRC 控制分量反馈（水路，地址40-49）---
-//
-// 以下5个变量为 V2.0 复合控制方案的核心诊断数据，用于上位机
-// 实时观测各控制子算法的独立输出，便于调试和性能分析：
-//
-//   MFF_Output（40-41）：模型前馈输出 — 基于系统数学模型（容积V、
-//     流量增益Kv、弹性模量BetaE等）计算的开环前馈控制量，提供
-//     快速的基准控制信号，是复合控制的主分量。
-//
-//   ILC_Output（42-43）：迭代学习控制输出 — 基于前一周期压力偏差
-//     的学习修正量，通过逐周期迭代减小重复性跟踪误差，提升
-//     周期性波形的跟踪精度。
-//
-//   ILC_Iteration（44-45）：ILC迭代次数 — 当前已完成的迭代学习
-//     周期数，用于判断 ILC 是否已充分收敛，以及监控学习进程。
-//
-//   ADRC_Output（46-47）：自抗扰控制器输出 — ADRC 的反馈控制量，
-//     基于扩展状态观测器(ESO)对系统扰动的实时估计，通过状态误差
-//     反馈律生成补偿信号，抑制未建模动态和外部扰动。
-//
-//   ESO_Disturbance（48-49）：扩展状态观测器扰动估计 — ESO 对系统
-//     总扰动（含未建模动态、参数摄动、外力干扰等）的实时估计值，
-//     是 ADRC 抗扰能力的核心指标，上位机可据此判断扰动水平及
-//     ADRC 补偿效果。
-//
-// 总输出关系：ControlOutput(26-27) = MFF_Output(40-41) + ILC_Output(42-43) + ADRC_Output(46-47)
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_MFF_Output);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 40-41: 水路模型前馈输出
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ILC_Output);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 42-43: 水路ILC学习输出
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ILC_Iteration);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 44-45: 水路ILC迭代次数
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ADRC_Output);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 46-47: 水路ADRC反馈输出
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ESO_Disturbance);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 48-49: 水路ESO扰动估计
-j := j + 2;
+FOR j := 20 TO 49 DO
+    INPUT_REGISTER[j] := 0;
+END_FOR
+j := 50;
 
 // ============================================================
 // 【油路实时数据区】（WORD地址 50–79）
@@ -374,69 +262,13 @@ INPUT_REGISTER[93] := Float_to_TwoWord.Word_HIGH;        // 92-93: 状态推进�
 // ============================================================
 j := 100;
 
-// --- 水路运行参数回读（100-109）---
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_TargetPressure);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 100-101: 水路目标压力回读
-j := j + 2;
+// --- 水路运行参数回读（WORD 100-123）—— V4.x 起仅油路，水路回读区清零 ---
+FOR j := 100 TO 123 DO
+    INPUT_REGISTER[j] := 0;
+END_FOR
+j := 124;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_MinPressure);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 102-103: 水路最低压力回读
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_Frequency);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 104-105: 水路频率回读
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_WaveType);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 106-107: 水路波形类型回读
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_HighLimit);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 108-109: 水路高压限值回读
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_TargetCycles);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 110-111: 水路目标循环次数回读
-j := j + 2;
-
-// --- V2.1: 水路阀样本参数回读 + 反推Kv/τv诊断（110-121）---
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_VBase);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 112-113: 水路基础容积回读
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_VSpecimen);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 114-115: 水路被试件容积回读
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_Kv);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 116-117: 水路反推Kv回读(诊断)
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_TauValve);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 118-119: 水路反推τv回读(诊断)
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ValveQnom);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 120-121: 水路阀额定流量回读
-j := j + 2;
-
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ValveDPnom);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 122-123: 水路阀额定压降回读
-j := j + 2;
-
-// --- 油路运行参数回读（122-131）---
+// --- 油路运行参数回读（124-135）---
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_TargetPressure);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 124-125: 油路目标压力回读
@@ -509,9 +341,9 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 150-151: 液压站温度限值回读
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_TestMode);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 152-153: 当前测试模式回读
+// 152-153: 保留 (原 TestMode 回读，V4.x 不再使用)
+INPUT_REGISTER[j]   := 0;
+INPUT_REGISTER[j+1] := 0;
 j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Sys_BetaE);
@@ -524,9 +356,9 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 156-157: 泄漏系数回读
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Water_ILC_LearningRate);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 158-159: 水路ILC学习率回读
+// 158-159: 保留 (原水路ILC学习率回读)
+INPUT_REGISTER[j]   := 0;
+INPUT_REGISTER[j+1] := 0;
 j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ILC_LearningRate);
@@ -684,9 +516,8 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 214-215: 压力32.04(水侧油缸_有杆腔压力)
 
 j := j + 2;
-Float_to_TwoWord(input := PRG_DeviceControl.toPC_Pressure_25_01);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 216-217: 压力25.01(水侧产品端压力)
+INPUT_REGISTER[j]   := 0;
+INPUT_REGISTER[j+1] := 0;                                  // 216-217: 保留 (原压力25.01水侧)
 
 j := j + 2;
 Float_to_TwoWord(input := PRG_DeviceControl.toPC_Pressure_26_01);
@@ -714,9 +545,8 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 226-227: 伺服泵_流量反馈
 
 j := j + 2;
-Float_to_TwoWord(input := PRG_HydraulicUnit_Control.Water_CylinderPos);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 228-229: 水路缸体位置传感器
+INPUT_REGISTER[j]   := 0;
+INPUT_REGISTER[j+1] := 0;                                  // 228-229: 保留 (原水路缸体位置)
 
 j := j + 2;
 Float_to_TwoWord(input := PRG_HydraulicUnit_Control.Oil_CylinderPos);

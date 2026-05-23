@@ -24,9 +24,7 @@ GVL_PulsePressure.PP_SysCommand := TwoWord_to_Float.Output;         // 2-3: 系�
 // 数据流: PC写入命令值 → PRG_PressureControl边沿检测
 i := i + 2;
 
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_TestMode := TwoWord_to_Float.Output;           // 4-5: 测试模式
-// 数据流: PC写入模式选择 → PRG_PressureControl决定激活通道
+// 4-5: 保留 (原 TestMode，V4.x 油路单通道后不再使用)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
@@ -66,114 +64,13 @@ GVL_PulsePressure.PP_FlushValveOutput := TwoWord_to_Float.Output;   // 16-17: �
 i := i + 2;
 
 // ============================================================
-// 水路控制参数区（WORD地址 20–63）
-// V2.1: 42-51 由 Kv/TauValve 改为阀样本参数(Qnom/DPnom/Umax/DynMode/DynParam)
-//       ILC和爆破参数顺延至 52-63
-// 解析22个水路控制参数（每个占2 WORD = 44 WORD）
+// 水路控制参数区（WORD 20–67）—— V4.x 起仅油路，水路寄存器保留不解析
 // ============================================================
-i := 20;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_TargetPressure := TwoWord_to_Float.Output; // 20-21: 水路目标压力
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_MinPressure := TwoWord_to_Float.Output;    // 22-23: 水路最低压力(PMin)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_Frequency := TwoWord_to_Float.Output;      // 24-25: 水路频率
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_WaveType := TwoWord_to_Float.Output;       // 26-27: 波形类型
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_DutyCycle := TwoWord_to_Float.Output;      // 28-29: 方波占空比
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_RisePct := TwoWord_to_Float.Output;        // 30-31: 上升段占比
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_HoldPct := TwoWord_to_Float.Output;        // 32-33: 保持段占比
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_FallPct := TwoWord_to_Float.Output;        // 34-35: 下降段占比
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_HighLimit := TwoWord_to_Float.Output;      // 36-37: 水路高压限值
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_TargetCycles := TwoWord_to_Float.Output;   // 38-39: 目标循环次数
-i := i + 2;
-
-// --- MFF 系统参数 ---
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_VBase := TwoWord_to_Float.Output;          // 40-41: 水路基础容积(m³)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_VSpecimen := TwoWord_to_Float.Output;      // 42-43: 水路被试件容积(m³)
-i := i + 2;
-
-// --- V2.1: 阀样本参数（替代原Kv/TauValve）---
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ValveQnom := TwoWord_to_Float.Output;      // 44-45: 阀额定流量(L/min)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ValveDPnom := TwoWord_to_Float.Output;     // 46-47: 阀额定压降(bar)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ValveUmax := TwoWord_to_Float.Output;      // 48-49: 阀额定电压(V)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ValveDynMode := TwoWord_to_Float.Output;   // 50-51: 阀动态模式(0=频响/1=阶跃)
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ValveDynParam := TwoWord_to_Float.Output;  // 52-53: 阀动态参数(Hz或ms)
-i := i + 2;
-
-// --- ILC 参数 ---
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ILC_Enable := TwoWord_to_Float.Output;     // 54-55: 水路ILC使能
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ILC_MaxIter := TwoWord_to_Float.Output;    // 56-57: 水路ILC最大迭代次数
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_ILC_LearningRate := TwoWord_to_Float.Output; // 58-59: 水路ILC学习率
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_BurstPressure := TwoWord_to_Float.Output;  // 60-61: 水路爆破压力
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_RiseTime := TwoWord_to_Float.Output;       // 62-63: 水路爆破上升时间
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_HoldTime := TwoWord_to_Float.Output;       // 64-65: 水路爆破保压时间
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Water_CycleReset := TwoWord_to_Float.Output;     // 66-67: 水路循环计数清零命令
+// 20-67: 保留 (原水路参数区)
 
 // ============================================================
-// 油路控制参数区（WORD地址 66–109）
-// V2.1: 阀样本参数替代Kv/TauValve，结构与水路区对称
+// 油路控制参数区（WORD地址 68–115）
+// V2.1: 阀样本参数替代Kv/TauValve
 // ============================================================
 i := 68;
 
@@ -260,17 +157,8 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Oil_ILC_LearningRate := TwoWord_to_Float.Output; // 106-107: 油路ILC学习率
 i := i + 2;
 
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_BurstPressure := TwoWord_to_Float.Output;    // 108-109: 油路爆破压力
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_RiseTime := TwoWord_to_Float.Output;         // 110-111: 油路爆破上升时间
-i := i + 2;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_HoldTime := TwoWord_to_Float.Output;         // 112-113: 油路爆破保压时间
-i := i + 2;
+// 108-113: 保留 (原油路爆破参数 BurstPressure / RiseTime / HoldTime，V4.x 不再使用)
+i := i + 6;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
 GVL_PulsePressure.PP_Oil_CycleReset := TwoWord_to_Float.Output;       // 114-115: 油路循环计数清零命令
@@ -331,9 +219,7 @@ GVL_PulsePressure.PP_IO_OutputBits := TwoWord_to_Float.Output;        // 134-135
 // 数据流: PC写入 → 硬件DO映射
 i := i + 2;
 
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_IO_WaterCircuitSel := TwoWord_to_Float.Output;   // 136-137: 水路选通
-// 数据流: PC写入 → 水路电磁阀硬件选通
+// 136-137: 保留 (原水路选通)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
@@ -450,10 +336,7 @@ PRG_DeviceControl.fromPC_HR_Pump2_Frequency_InPut := TwoWord_to_Float.Output;   
 
 
 i := 170;
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_WaveUpload_Channel := TwoWord_to_Float.Output;      // 170-171
-// 数据流: PC写入波形通道选择 → PRG_PressureControl决定加载到水路或油路WaveGen
-
+// 170-171: 保留 (原 WaveUpload_Channel，V4.x 仅油路无需通道选择)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
