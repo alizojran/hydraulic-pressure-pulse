@@ -11,8 +11,11 @@ VAR
 	fbMFF_O : FB_ModelFeedforward;
 	fbPID_O : FB_PID;
 	fbILC_O : FB_ILC;
+	fbADRC_O : FB_HydraulicADRC;
 	rVTotal_O : REAL; // 油路总容积
 	rPs_Pa : REAL; // 供油压力 (Pa)
+	rBetaE : REAL; // 体积弹性模量 (Pa) — RunOilChannel 内联后提到主 VAR
+	rCLeak : REAL; // 泄漏系数 — RunOilChannel 内联后提到主 VAR
 	rError_O : REAL; // 油路跟踪误差
 	rUTotal_O : REAL; // 油路总控制量
 	rUMff_O : REAL;
@@ -223,8 +226,135 @@ CASE iState OF
     bRunning := TRUE;
     GVL_PulsePressure.PP_SysState := 3.0;  // 运行
 
-    // ==================== 油路控制 ====================
-    RunOilChannel();
+    // ==================== 油路控制 (原 RunOilChannel 内联) ====================
+
+    // 读取系统参数 (带默认值保护)
+    rBetaE := GVL_PulsePressure.PP_Sys_BetaE;
+    IF rBetaE < 1.0E6 THEN rBetaE := 1.4E9; END_IF
+    rCLeak := GVL_PulsePressure.PP_Sys_CLeak;
+    IF rCLeak < 0.0 THEN rCLeak := 1.0E-12; END_IF
+
+    // ---- 1. 波形生成 (含 ARP1383C 误差包络) ----
+    fbWaveGen_O(
+        bEnable       := TRUE,
+        rPMin         := rActualPMin_O,
+        rPMax         := GVL_PulsePressure.PP_Oil_TargetPressure,
+        rFrequency    := GVL_PulsePressure.PP_Oil_Frequency,
+        iWaveType     := REAL_TO_INT(GVL_PulsePressure.PP_Oil_WaveType),
+        rRisePct      := GVL_PulsePressure.PP_Oil_RisePct,
+        rHoldPct      := GVL_PulsePressure.PP_Oil_HoldPct,
+        rFallPct      := GVL_PulsePressure.PP_Oil_FallPct,
+        rOvershoot    := GVL_PulsePressure.PP_Oil_Overshoot,
+        rRingPct      := GVL_PulsePressure.PP_Oil_RingPct,
+        rLowDwellPct  := GVL_PulsePressure.PP_Oil_LowDwellPct,
+        rDt           := rDt,
+        bReset        := FALSE,
+        nMffLeadSteps := 120,
+        rEnvPctP      := GVL_PulsePressure.PP_Oil_EnvPctP,
+        rEnvPctT      := GVL_PulsePressure.PP_Oil_EnvPctT
+    );
+
+    // 经验比例修正 (保留原 1.5MPa 分段缩放)
+    IF fbWaveGen_O.rTarget >= 1.5 THEN
+        GVL_PulsePressure.PP_Oil_SetpointPressure := 1.5 + (fbWaveGen_O.rTarget - 1.5) * 0.7;
+    ELSE
+        GVL_PulsePressure.PP_Oil_SetpointPressure := 1.5 + (fbWaveGen_O.rTarget - 1.5) * 1.4;
+    END_IF
+
+    // 包络输出 → GVL (供 HMI 绘制 ARP1383C 容差带)
+    GVL_PulsePressure.PP_Oil_TargetUpper := fbWaveGen_O.rTargetUpper;
+    GVL_PulsePressure.PP_Oil_TargetLower := fbWaveGen_O.rTargetLower;
+
+    GVL_PulsePressure.PP_Oil_WavePhase    := fbWaveGen_O.rPhase * 360.0;
+    GVL_PulsePressure.PP_Oil_Frequency_FB := GVL_PulsePressure.PP_Oil_Frequency;
+
+    // 周期计数 + 峰值锁存
+    IF fbWaveGen_O.bNewCycle THEN
+        GVL_PulsePressure.PP_Oil_CyclesDone   := GVL_PulsePressure.PP_Oil_CyclesDone + 1.0;
+        GVL_PulsePressure.PP_TotalCyclesDone  := GVL_PulsePressure.PP_TotalCyclesDone + 1.0;
+        GVL_PulsePressure.PP_Oil_PeakPressure := rPeakPressure_O;
+        rPeakPressure_O := 0.0;
+    END_IF
+    IF GVL_PulsePressure.PP_Oil_ActualPressure > rPeakPressure_O THEN
+        rPeakPressure_O := GVL_PulsePressure.PP_Oil_ActualPressure;
+    END_IF
+
+    // ---- 2. 跟踪误差 ----
+    rError_O := fbWaveGen_O.rTarget - GVL_PulsePressure.PP_Oil_ActualPressure;
+    GVL_PulsePressure.PP_Oil_PressureError := rError_O;
+
+    // ---- 3. 模型前馈 (用超前相位让阀提前响应) ----
+    fbMFF_O(
+        bEnable        := TRUE,
+        rTargetMPa     := fbWaveGen_O.rTargetLead,
+        rTargetPrevMPa := fbWaveGen_O.rTargetLeadPrev,
+        rDt            := rDt,
+        rBetaE         := rBetaE,
+        rVTotal        := rVTotal_O,
+        rPs            := rPs_Pa,
+        rCLeak         := rCLeak,
+        rValveQnom     := GVL_PulsePressure.PP_Oil_ValveQnom,
+        rValveDPnom    := GVL_PulsePressure.PP_Oil_ValveDPnom,
+        rValveUmax     := GVL_PulsePressure.PP_Oil_ValveUmax,
+        iValveDynMode  := REAL_TO_INT(GVL_PulsePressure.PP_Oil_ValveDynMode),
+        rValveDynParam := GVL_PulsePressure.PP_Oil_ValveDynParam
+    );
+    rUMff_O := fbMFF_O.rOutput;
+    GVL_PulsePressure.PP_Oil_MFF_Output := rUMff_O;
+    GVL_PulsePressure.PP_Oil_Kv         := fbMFF_O.rKv_Calc;
+    GVL_PulsePressure.PP_Oil_TauValve   := fbMFF_O.rTauValve_Calc;
+
+    // ---- 4. ILC 前馈 ----
+    // nWaveType 与 FB_WaveformGen 同编码: 0=正弦 / 1=梯形 / 2=水锤波
+    // 水锤波 (=2) 走 3 级端点学习 (rVPeak / rVMax / rVMin)
+    // 段宽来自 fbWaveGen_O 已归一化的 rSegRise / rSegRing / rSegHold / rSegFall
+    fbILC_O(
+        bEnable         := (GVL_PulsePressure.PP_Oil_ILC_Enable >= 0.5),
+        rTargetRaw      := fbWaveGen_O.rTarget,
+        rActual         := GVL_PulsePressure.PP_Oil_ActualPressure,
+        iPointIndex     := fbWaveGen_O.iPointIndex,
+        iPointsPerCycle := fbWaveGen_O.iPointsPerCycle,
+        bNewCycle       := fbWaveGen_O.bNewCycle,
+        bReset          := FALSE,
+        iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Oil_ILC_MaxIter),
+        rLearningRate   := GVL_PulsePressure.PP_Oil_ILC_LearningRate,
+        iWaveTypeIn     := REAL_TO_INT(GVL_PulsePressure.PP_Oil_WaveType),
+        rWHPMaxTarget   := GVL_PulsePressure.PP_Oil_TargetPressure,
+        rWHRiseFrac     := fbWaveGen_O.rSegRise,
+        rWHRingFrac     := fbWaveGen_O.rSegRing,
+        rWHHoldFrac     := fbWaveGen_O.rSegHold,
+        rWHFallFrac     := fbWaveGen_O.rSegFall
+    );
+    rUIlc_O := fbILC_O.rOutput;
+    GVL_PulsePressure.PP_Oil_ILC_Output    := rUIlc_O;
+    GVL_PulsePressure.PP_Oil_ILC_Iteration := INT_TO_REAL(fbILC_O.iIteration);
+
+    // ---- 5. ADRC 反馈 ----
+    fbADRC_O(
+        bEnable     := TRUE,
+        rError      := rError_O,
+        rDt         := rDt,
+        rVTotal     := rVTotal_O,
+        bReset      := FALSE,
+        rBetaE      := rBetaE,
+        rPs         := rPs_Pa,
+        rValveQnom  := GVL_PulsePressure.PP_Oil_ValveQnom,
+        rValveDPnom := GVL_PulsePressure.PP_Oil_ValveDPnom,
+        rValveUmax  := GVL_PulsePressure.PP_Oil_ValveUmax,
+        rPID_Kp     := 0.4,
+        rPID_Ki     := 0,
+        nCtrlMode   := 1
+    );
+    rUAdrc_O := fbADRC_O.rOutput;
+    GVL_PulsePressure.PP_Oil_ADRC_Output     := rUAdrc_O;
+    GVL_PulsePressure.PP_Oil_ESO_Disturbance := fbADRC_O.rZ2;
+
+    // ---- 6. MFF + ILC + ADRC 三环复合 ----
+    rUTotal_O := rUMff_O + rUIlc_O + rUAdrc_O;
+    IF rUTotal_O >  10.0 THEN rUTotal_O :=  10.0; END_IF
+    IF rUTotal_O < -10.0 THEN rUTotal_O := -10.0; END_IF
+
+    PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O * 10;
 
     // 检查目标循环数（到达后自动停止）
     IF GVL_PulsePressure.PP_Oil_TargetCycles > 0.0 THEN
