@@ -47,7 +47,7 @@ VAR_OUTPUT
 	rPlatTopA      : REAL;
 	rPlatTopB      : REAL;
 	// 波形检测
-	nWaveType      : INT  := 0;      // 0=检测中, 1=正弦, 2=三角, 3=梯形, 4=矩形, 5=任意波, 6=水锤波
+	nWaveType      : INT  := -1;     // 与 FB_WaveformGen 同编码: -1=检测中, 0=正弦, 1=梯形, 2=水锤波
 	rFlatFrac      : REAL;
 	rSymFrac       : REAL;
 	// 水锤波 3 级端点学习 (除 rVMin/rVMax 外, 额外学习过冲峰指令)
@@ -195,7 +195,7 @@ IF bReset OR NOT bEnable THEN
         bVInitialized     := FALSE;
         rActualPrev       := 0.0;
         rTargetPrev       := 0.0;
-        nWaveType              := 0;
+        nWaveType              := -1;
         rFlatFrac              := 0.0;
         rSymFrac               := 0.0;
         iNearExtCount          := 0;
@@ -259,18 +259,15 @@ END_IF
 
 // ============================================================
 // 显式波形类型映射 (优先于自动检测)
-//   FB_WaveformGen 的 iWaveType: 0=正弦 / 1=梯形 / 2=水锤波
-//   → 本 FB nWaveType:          1=正弦 / 3=梯形 / 6=水锤波
-//   iWaveTypeIn = -1 时保留原有自动检测路径 (历史调用兼容)
+//   nWaveType 与 FB_WaveformGen 的 iWaveType 同编码:
+//     0 = 正弦       (Fig.3)
+//     1 = 梯形       (Fig.1)
+//     2 = 水锤波     (Fig.2)
+//    -1 = 检测中     (仅当 iWaveTypeIn = -1 时使用自动检测)
+//   水锤波必须由 iWaveTypeIn = 2 显式指定 (自动检测无法判别过冲)
 // ============================================================
-IF iWaveTypeIn = 0 THEN
-    IF nWaveType <> 1 THEN nWaveType := 1; END_IF
-    bWaveDetected := TRUE;
-ELSIF iWaveTypeIn = 1 THEN
-    IF nWaveType <> 3 THEN nWaveType := 3; END_IF
-    bWaveDetected := TRUE;
-ELSIF iWaveTypeIn = 2 THEN
-    IF nWaveType <> 6 THEN nWaveType := 6; END_IF
+IF iWaveTypeIn = 0 OR iWaveTypeIn = 1 OR iWaveTypeIn = 2 THEN
+    IF nWaveType <> iWaveTypeIn THEN nWaveType := iWaveTypeIn; END_IF
     bWaveDetected := TRUE;
 END_IF
 
@@ -339,18 +336,12 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         IF iIterCount = nWarmupCycles AND NOT bWaveDetected AND iTotalDetectCount > 20 THEN
             rFlatFrac := INT_TO_REAL(iNearExtCount)        / INT_TO_REAL(iTotalDetectCount);
             rSymFrac  := INT_TO_REAL(iTargetAboveMidCount) / INT_TO_REAL(iTotalDetectCount);
-            // 先按平台占比判类型；对称性只用于区分正弦/三角
-            // 梯形/矩形即使非对称（底平 ≠ 顶平宽度）也走 12 段 α 路径
-            IF rFlatFrac > FLAT_THR_TRAP THEN
-                nWaveType := 4;       // 矩形
-            ELSIF rFlatFrac > FLAT_THR_SIN THEN
-                nWaveType := 3;       // 梯形（允许非对称）
-            ELSIF rSymFrac < 0.35 OR rSymFrac > 0.65 THEN
-                nWaveType := 5;       // 任意波（无平台且非对称）
-            ELSIF rFlatFrac > FLAT_THR_TRI THEN
-                nWaveType := 1;       // 正弦
+            // 自动检测仅在 sine / trapezoid 间区分 (水锤需 iWaveTypeIn=2 显式指定)
+            // 平台占比大 → 梯形 (含旧矩形); 否则 → 正弦 (含旧三角/任意波)
+            IF rFlatFrac > FLAT_THR_SIN THEN
+                nWaveType := 1;       // 梯形
             ELSE
-                nWaveType := 2;       // 三角
+                nWaveType := 0;       // 正弦
             END_IF
             bWaveDetected := TRUE;
         END_IF
@@ -362,7 +353,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         IF NOT bVInitialized THEN
             rVMax := rPrevTargetMax;
             rVMin := rPrevTargetMin;
-            IF nWaveType = 6 THEN
+            IF nWaveType = 2 THEN
                 // 水锤波: rTargetMax 是 P_OS 而非 PMax 保压目标
                 rVPeak := rPrevTargetMax;
                 IF rWHPMaxTarget > 0.001 THEN
@@ -375,8 +366,8 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         IF iMaxIterations > 0 AND iIterCount >= iMaxIterations THEN
             bConverged := TRUE;
         ELSE
-            // α 8 段自学习（正弦 nWaveType=1 + 三角 nWaveType=2）
-            IF bAlphaEnable AND (nWaveType = 1 OR nWaveType = 2) THEN
+            // α 8 段自学习 (正弦 nWaveType=0)
+            IF bAlphaEnable AND nWaveType = 0 THEN
                 FOR iBinK := 1 TO 8 DO
                     rAlphaCmd[iBinK] := rAlphaCmd[iBinK]
                                      + rAlphaLR * (rAlphaTgt[iBinK] - rAlphaFb[iBinK]);
@@ -394,8 +385,8 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // α 12 段自学习（梯形 nWaveType=3 + 矩形 nWaveType=4）
-            IF bAlphaEnable AND (nWaveType = 3 OR nWaveType = 4) THEN
+            // α 12 段自学习 (梯形 nWaveType=1)
+            IF bAlphaEnable AND nWaveType = 1 THEN
                 FOR iBinK := 1 TO 12 DO
                     rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK]
                                        + rAlphaLR * (rAlpha12Tgt[iBinK] - rAlpha12Fb[iBinK]);
@@ -413,9 +404,9 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // 平台分 2 段幅值修正学习（梯形 + 矩形）
+            // 平台分 2 段幅值修正学习 (梯形 nWaveType=1)
             // 双门控：目标平台时间占比 < 3% → 跳过并衰减；样本不足 → 跳过
-            IF bPlatCorrEnable AND (nWaveType = 3 OR nWaveType = 4) THEN
+            IF bPlatCorrEnable AND nWaveType = 1 THEN
                 // 顶部平台
                 IF rAlpha12Tgt[7] >= PLAT_TGT_MIN_FRAC THEN
                     IF iCntTopA >= 2 THEN
@@ -457,7 +448,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             END_IF
 
             // 端点幅值自学习（加法型）：水锤波由专用 3 级学习处理, 跳过通用路径
-            IF nWaveType <> 6 THEN
+            IF nWaveType <> 2 THEN
                 rPeakErrSum   := rPeakErrSum   + rPeakError;
                 rValleyErrSum := rValleyErrSum + rValleyError;
                 nUpdateCount  := nUpdateCount  + 1;
@@ -482,7 +473,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
 
             // ----- 水锤波 3 级端点学习 (vPeak / vMax / vMin 分别对应 P_OS / PMax / PMin) -----
             // 仅当对应段有足够样本时更新; 段 2 (ring) 与段 4 (fall) 是过渡段, 不学习
-            IF nWaveType = 6 THEN
+            IF nWaveType = 2 THEN
                 // 段 1 峰: drive actual 抵达 rPrevTargetMax (= P_OS)
                 IF rWHOSPeakActual > -1.0E29 THEN
                     rWHPeakErr := rPrevTargetMax - rWHOSPeakActual;
@@ -529,7 +520,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     END_IF
 
     // 缓存梯形/矩形平台 phase 边界（per-sample 与输出阶段共用）
-    IF nWaveType = 3 OR nWaveType = 4 THEN
+    IF nWaveType = 1 THEN
         rT1Cached    := rAlpha12Cmd[1];
         rT6Cached    := rT1Cached + rAlpha12Cmd[2] + rAlpha12Cmd[3]
                      + rAlpha12Cmd[4] + rAlpha12Cmd[5] + rAlpha12Cmd[6];
@@ -539,7 +530,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     END_IF
 
     // 缓存水锤波 5 段边界 (累积归一化相位; 上游已保证 sum = 1)
-    IF nWaveType = 6 THEN
+    IF nWaveType = 2 THEN
         rWH_T1 := rWHRiseFrac;
         rWH_T2 := rWH_T1 + rWHRingFrac;
         rWH_T3 := rWH_T2 + rWHHoldFrac;
@@ -594,7 +585,7 @@ IF rActual   >= rActualPrev THEN bFbRising  := TRUE; ELSE bFbRising  := FALSE; E
 rActualPrev := rActual;
 
 // --------- 8 段分箱（正弦 + 三角共用）---------
-IF (nWaveType = 1 OR nWaveType = 2) AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
+IF (nWaveType = 0) AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
     iBinTotal := iBinTotal + 1;
     rTgtPos := rTargetRaw - rMidpoint;
     IF bTgtRising THEN
@@ -632,7 +623,7 @@ END_IF
 // --------- 12 段分箱（梯形 + 矩形共用）---------
 // 1=底平; 2..6=升 5 子段（自下而上）; 7=顶平; 8..12=降 5 子段（自上而下）
 // 斜坡振幅区间 [-PLATEAU_BAND_K, +PLATEAU_BAND_K]·hR 五等分
-IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
+IF (nWaveType = 1) AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
     iBinTotal12 := iBinTotal12 + 1;
     rPlateauThr := PLATEAU_BAND_K * rHalfRange;
     rBand1 := -0.6 * rPlateauThr;   // = -0.42 hR
@@ -691,7 +682,7 @@ END_IF
 // 段 3: 累加均值 (供 rVMax 学习, 抵达 PMax 保压目标)
 // 段 4: fall 过渡, 不学习
 // 段 5: 累加均值 (供 rVMin 学习, 抵达 PMin 低保持)
-IF nWaveType = 6 AND iIterCount >= 1 THEN
+IF nWaveType = 2 AND iIterCount >= 1 THEN
     IF rPhi < rWH_T1 THEN
         IF rActual > rWHOSPeakActual THEN rWHOSPeakActual := rActual; END_IF
     ELSIF rPhi >= rWH_T2 AND rPhi < rWH_T3 THEN
@@ -704,7 +695,7 @@ IF nWaveType = 6 AND iIterCount >= 1 THEN
 END_IF
 
 // --------- 平台 2 段反馈累加（按 cmd phase 切割）---------
-IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 THEN
+IF (nWaveType = 1) AND iIterCount >= 1 THEN
     IF rPhi < rT1Cached AND rT1Cached > 0.001 THEN
         IF rPhi < rBotMidPhase THEN
             rFbSumBotA := rFbSumBotA + rActual;
@@ -746,7 +737,7 @@ END_IF
 // 源波形 rSourceTarget：
 //   正弦(1) / 三角(2) → α 8 段相位重映射后再按各自基波形重建
 //   其他波形         → 直通 rTargetRaw
-IF nWaveType = 1 OR nWaveType = 2 THEN
+IF nWaveType = 0 THEN
     rT1 := rAlphaCmd[1];
     rT2 := rT1 + rAlphaCmd[2];
     rT3 := rT2 + rAlphaCmd[3];
@@ -780,20 +771,11 @@ IF nWaveType = 1 OR nWaveType = 2 THEN
         IF rDelta > 0.001 THEN rPhiStd := 0.875 + (rPhi - rT7) / rDelta * 0.125; ELSE rPhiStd := 0.875; END_IF
     END_IF
 
-    IF nWaveType = 1 THEN
-        // 正弦：基波形 = (1 - cos(2π·φ_std)) / 2
-        rWarpedY := (1.0 - COS(TWO_PI * rPhiStd)) / 2.0;
-    ELSE
-        // 三角：基波形 = 0→1→0 线性三角，尖峰在 φ_std = 0.5
-        IF rPhiStd < 0.5 THEN
-            rWarpedY := 2.0 * rPhiStd;
-        ELSE
-            rWarpedY := 2.0 * (1.0 - rPhiStd);
-        END_IF
-    END_IF
+    // 正弦：基波形 = (1 - cos(2π·φ_std)) / 2
+    rWarpedY := (1.0 - COS(TWO_PI * rPhiStd)) / 2.0;
     rSourceTarget := rPrevTargetMin + rWarpedY * rPrevTargetRange;
 
-ELSIF nWaveType = 6 THEN
+ELSIF nWaveType = 2 THEN
     // 水锤波: 5 段直接重构 (3 级端点学习 vPeak / vMax / vMin, 不走仿射重映射)
     //   段 1: rVPeak                       (过冲峰)
     //   段 2: rVMax                        (ring 衰减后立即落到 PMax)
@@ -820,7 +802,7 @@ ELSIF nWaveType = 6 THEN
     bNewCyclePrev := bNewCycle;
     RETURN;
 
-ELSIF nWaveType = 3 OR nWaveType = 4 THEN
+ELSIF nWaveType = 1 THEN
     // 梯形 / 矩形：12 段相位重映射 + 梯形模板
     // 模板（标准振幅 0..1）：
     //   底平(0) → 升 0→0.2→0.4→0.6→0.8→1 → 顶平(1) → 降 1→0.8→0.6→0.4→0.2→0
@@ -892,7 +874,7 @@ rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
 
 // 梯形/矩形平台 2 段幅值修正：按 cmd phase 落在哪个子段叠加对应 MPa 偏置
-IF bPlatCorrEnable AND (nWaveType = 3 OR nWaveType = 4) THEN
+IF bPlatCorrEnable AND (nWaveType = 1) THEN
     IF rPhi < rT1Cached THEN
         IF rPhi < rBotMidPhase THEN
             rVirtualTarget := rVirtualTarget + rPlatBotA;
