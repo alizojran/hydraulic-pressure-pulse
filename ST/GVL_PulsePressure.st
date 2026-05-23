@@ -60,7 +60,6 @@ VAR_GLOBAL
 	PP_Oil_PressureError : REAL; // 油路压力偏差(MPa)
 	PP_Oil_ControlOutput : REAL; // 油路 MFF+ILC+PID 总控制输出(V)
 	PP_Oil_ValveCurrent : REAL; // 油路比例阀电流(mA)
-	PP_Oil_CylinderPos : REAL; // 油路缸体位移(mm)
 	PP_Oil_CyclesDone : REAL; // 油路已完成循环次数
 	PP_Oil_Frequency_FB : REAL; // 油路实际频率回读(Hz)
 	PP_Oil_WavePhase : REAL; // 油路波形相位角(°)

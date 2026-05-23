@@ -103,9 +103,7 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 40-41: 比例阀电流(mA)
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_CylinderPos);
-INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 42-43: 缸体位移(mm)
+// 42-43: 保留 (原缸体位移槽位; 直接伺服阀控制系统无此量)
 j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_CyclesDone);
@@ -400,7 +398,6 @@ j := j + 2;
 //   272-273 : SMP 压力反馈
 //   274-275 : SMP 转速反馈
 //   276-277 : SMP 流量反馈
-//   278-279 : 油缸位置 Oil_CylinderPos
 //   280-281 : HR_Pump1 频率反馈
 //   282-283 : HR_Pump2 频率反馈
 //   284-319 : 保留
