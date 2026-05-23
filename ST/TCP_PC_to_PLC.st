@@ -6,17 +6,21 @@ VAR
 END_VAR
 
 // ===================================================================
-// TCP HOLDING_REGISTER 地址布局 (PC → PLC，V4.x)
+// TCP HOLDING_REGISTER 地址布局 (PC → PLC, V5.0)
 // ===================================================================
-// [A] 系统控制         0   – 31     (32 W)
-// [B] 冲洗排气         32  – 47     (16 W)
-// [C] 油路波形         48  – 95     (48 W)
-// [D] 油路 ILC/PID     96  – 127    (32 W; 96-109 保留, 110-121 实际用)
-// [E] 液压站           128 – 159    (32 W; 132-133 保留)
-// [F] 保留             160 – 175    (16 W; 原 MFF βe/Cleak)
-// [G] IO 控制          176 – 191    (16 W)
-// [H] 设备控制         192 – 255    (64 W)  ← 由 PRG_DeviceControl 解析
-// [Z] 未来扩展         256 – 1999
+// 设计原则:
+//   - 每节内字段从基址连续紧排, 节尾留大块预留
+//   - 节边界对齐 32W 倍数, 便于上位机分块读写
+//   - 字段一旦发布不再挪位; 新字段从节末预留区追加
+// ===================================================================
+// [A] 系统控制    0   – 31    (32 W;  6 字段 = 12 W, 余 20 W)
+// [B] 冲洗排气    32  – 47    (16 W;  2 字段 =  4 W, 余 12 W)
+// [C] 油路波形    48  – 95    (48 W; 15 字段 = 30 W, 余 18 W)
+// [D] 控制器      96  – 127   (32 W;  6 字段 = 12 W, 余 20 W)  ILC + PID
+// [E] 液压站     128 – 159    (32 W;  4 字段 =  8 W, 余 24 W)
+// [F] IO 控制    160 – 191    (32 W;  2 字段 =  4 W, 余 28 W)
+// [G] 设备控制   192 – 255    (64 W; 由 PRG_DeviceControl 解析)
+// [Z] 未来扩展   256 – 1999
 // ===================================================================
 
 
@@ -47,44 +51,44 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_HeartbeatTimeout := TwoWord_to_Float.Output;       // 10-11: 心跳超时(s)
 i := i + 2;
 
-// 12-31: 保留 (10 vars reserved)
+// 12-31: 保留 (10 字段)
 
 
 // ===== [B] 冲洗排气 (32-47) =====
 i := 32;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_FlushDuration := TwoWord_to_Float.Output;          // 32-33: 冲洗持续时间(s)，0=跳过冲洗
+GVL_PulsePressure.PP_FlushDuration := TwoWord_to_Float.Output;          // 32-33: 冲洗持续时间(s); 0=跳过冲洗
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_FlushValveOutput := TwoWord_to_Float.Output;       // 34-35: 冲洗阀门输出(V)，默认2.0
+GVL_PulsePressure.PP_FlushValveOutput := TwoWord_to_Float.Output;       // 34-35: 冲洗阀门输出(V); 默认 2.0
 i := i + 2;
 
-// 36-47: 保留 (6 vars reserved)
+// 36-47: 保留 (6 字段)
 
 
 // ===== [C] 油路波形 (48-95) =====
 i := 48;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_WaveType := TwoWord_to_Float.Output;           // 48-49: 波形类型 0=正弦 1=梯形 2=ARP1383水锤
+GVL_PulsePressure.PP_Oil_WaveType := TwoWord_to_Float.Output;           // 48-49: 波形类型 0=正弦 1=梯形 2=ARP1383 水锤
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_TargetPressure := TwoWord_to_Float.Output;     // 50-51: 目标峰值压力 PMax(MPa)
+GVL_PulsePressure.PP_Oil_TargetPressure := TwoWord_to_Float.Output;     // 50-51: 目标峰值压力 PMax (MPa)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_MinPressure := TwoWord_to_Float.Output;        // 52-53: 最低压力 PMin(MPa)
+GVL_PulsePressure.PP_Oil_MinPressure := TwoWord_to_Float.Output;        // 52-53: 最低压力 PMin (MPa)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_Frequency := TwoWord_to_Float.Output;          // 54-55: 脉冲频率(Hz)
+GVL_PulsePressure.PP_Oil_Frequency := TwoWord_to_Float.Output;          // 54-55: 脉冲频率 (Hz)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_HighLimit := TwoWord_to_Float.Output;          // 56-57: 高压保护限值(MPa)
+GVL_PulsePressure.PP_Oil_HighLimit := TwoWord_to_Float.Output;          // 56-57: 高压保护限值 (MPa)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
@@ -120,101 +124,95 @@ GVL_PulsePressure.PP_Oil_CycleReset := TwoWord_to_Float.Output;         // 72-73
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_EnvPctP := TwoWord_to_Float.Output;            // 74-75: 包络压力容差 ×PMax (默认 0.05)
+GVL_PulsePressure.PP_Oil_EnvPctP := TwoWord_to_Float.Output;            // 74-75: ARP1383C 包络压力容差 ×PMax (默认 0.05)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_EnvPctT := TwoWord_to_Float.Output;            // 76-77: 包络时间容差 ×周期 (默认 0.10)
+GVL_PulsePressure.PP_Oil_EnvPctT := TwoWord_to_Float.Output;            // 76-77: ARP1383C 包络时间容差 ×周期 (默认 0.10)
 i := i + 2;
 
-// 78-95: 保留 (9 vars reserved)
+// 78-95: 保留 (9 字段)
 
 
-// ===== [D] 96-109: 保留 (原油路 MFF 参数; MFF 已删除) =====
-i := 110;
-
-TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_ILC_Enable := TwoWord_to_Float.Output;         // 110-111: ILC 使能
-i := i + 2;
+// ===== [D] 控制器: ILC + PID (96-127) =====
+i := 96;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_ILC_MaxIter := TwoWord_to_Float.Output;        // 112-113: ILC 最大迭代次数
+GVL_PulsePressure.PP_Oil_ILC_Enable := TwoWord_to_Float.Output;         // 96-97: ILC 使能
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_ILC_LearningRate := TwoWord_to_Float.Output;   // 114-115: ILC 学习率(0~1)
+GVL_PulsePressure.PP_Oil_ILC_MaxIter := TwoWord_to_Float.Output;        // 98-99: ILC 最大迭代次数
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_PID_Kp := TwoWord_to_Float.Output;             // 116-117: PID 比例增益 Kp (V/MPa)
+GVL_PulsePressure.PP_Oil_ILC_LearningRate := TwoWord_to_Float.Output;   // 100-101: ILC 学习率 (0~1)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_PID_Ki := TwoWord_to_Float.Output;             // 118-119: PID 积分增益 Ki (V/MPa/s)
+GVL_PulsePressure.PP_Oil_PID_Kp := TwoWord_to_Float.Output;             // 102-103: PID 比例增益 Kp (V/MPa)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_PID_Kd := TwoWord_to_Float.Output;             // 120-121: PID 微分增益 Kd (V·s/MPa)
+GVL_PulsePressure.PP_Oil_PID_Ki := TwoWord_to_Float.Output;             // 104-105: PID 积分增益 Ki (V/MPa/s)
 i := i + 2;
 
-// 122-127: 保留 (3 vars reserved)
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_PID_Kd := TwoWord_to_Float.Output;             // 106-107: PID 微分增益 Kd (V·s/MPa)
+i := i + 2;
+
+// 108-127: 保留 (10 字段)
 
 
-// ===== [E] 液压站参数 (128-159) =====
+// ===== [E] 液压站 (128-159) =====
 i := 128;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Hydro_HighLimit := TwoWord_to_Float.Output;        // 128-129: 液压站高压限值(MPa)
+GVL_PulsePressure.PP_Hydro_HighLimit := TwoWord_to_Float.Output;        // 128-129: 液压站高压限值 (MPa)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Hydro_TempLimit := TwoWord_to_Float.Output;        // 130-131: 油温保护限值(°C)
-i := i + 2;
-
-// 132-133: 保留 (原液压站工作压力 Ps; 仅 MFF 用，已删除)
+GVL_PulsePressure.PP_Hydro_TempLimit := TwoWord_to_Float.Output;        // 130-131: 油温保护限值 (°C)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Hydro_PumpCmd := TwoWord_to_Float.Output;          // 134-135: 液压泵启停命令
+GVL_PulsePressure.PP_Hydro_PumpCmd := TwoWord_to_Float.Output;          // 132-133: 液压泵启停命令
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Hydro_MotorSpeed := TwoWord_to_Float.Output;       // 136-137: 电机转速设定(rpm)
+GVL_PulsePressure.PP_Hydro_MotorSpeed := TwoWord_to_Float.Output;       // 134-135: 电机转速设定 (rpm)
 i := i + 2;
 
-// 138-159: 保留 (11 vars reserved)
+// 136-159: 保留 (12 字段)
 
 
-// ===== [F] 160-175: 保留 (原系统物理常数 βe / Cleak; 仅 MFF 用，已删除) =====
-
-
-// ===== [G] IO 控制 (176-191) =====
-i := 176;
+// ===== [F] IO 控制 (160-191) =====
+i := 160;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_IO_OutputBits := TwoWord_to_Float.Output;          // 176-177: 数字量输出控制
+GVL_PulsePressure.PP_IO_OutputBits := TwoWord_to_Float.Output;          // 160-161: 数字量输出控制
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_IO_OilCircuitSel := TwoWord_to_Float.Output;       // 178-179: 油路选通
+GVL_PulsePressure.PP_IO_OilCircuitSel := TwoWord_to_Float.Output;       // 162-163: 油路选通
 i := i + 2;
 
-// 180-191: 保留 (6 vars reserved)
+// 164-191: 保留 (14 字段)
 
 
-// ===== [H] 设备控制 (192-255) =====
+// ===== [G] 设备控制 (192-255) =====
 // 该区域的解析由 PRG_DeviceControl（待重写）负责。原始 HOLDING_REGISTER
-// 直接保留在缓冲区，新 PRG_DeviceControl 可直接按 bit/Float 访问解析。
+// 直接保留在缓冲区, 新 PRG_DeviceControl 可直接按 bit/Float 访问解析。
 //
-// 建议地址分配（占位约定）：
+// 建议地址分配 (占位约定):
 //   192-193 : bit-packed 泵启停 (SMP/XH/HR1/HR2 × Start/Stop/Reset, 12 bits)
 //   194-195 : bit-packed Pne_Valve YV1-YV13 (13 bits)
-//   196-205 : 保留 (5 vars)
-//   206-207 : SMP 压力设定(MPa)
+//   196-205 : 保留 (5 字段)
+//   206-207 : SMP 压力设定 (MPa)
 //   208-209 : SMP 流量设定
 //   210-211 : HR_Pump1 频率设定
 //   212-213 : HR_Pump2 频率设定
-//   214-255 : 保留
+//   214-255 : 保留 (21 字段)
 
 
 // ===== [Z] 256-1999: 未来扩展 =====
