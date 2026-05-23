@@ -123,7 +123,7 @@ IF rActualPMin_O >= GVL_PulsePressure.PP_Oil_TargetPressure THEN
 END_IF
 
 // 获取油缸位置
-rCylinderPos := PRG_HydraulicUnit_Control.Oil_CylinderPos;
+rCylinderPos := GVL_PulsePressure.PP_Oil_CylinderPos;
 
 // ============================================================
 // 状态机
