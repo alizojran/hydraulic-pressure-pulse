@@ -54,6 +54,10 @@ VAR
 	iWaveTypeNow : INT;      // 当前波形类型（每周期顶层从 PP_Trace_Flag 解析一次）
 	iLastWaveTypeW : INT;    // 水路上一周期波形类型（用于直线波 PID 复位边沿检测）
 	iLastWaveTypeO : INT;    // 油路上一周期波形类型
+	iLinearPhaseW : INT;     // 水路直线波相位 0=升压 1=保压（用于 Ki 门控与积分复位）
+	iLinearPhasePrevW : INT; // 水路上一周期直线波相位
+	iLinearPhaseO : INT;     // 油路直线波相位
+	iLinearPhasePrevO : INT;
 	Water_Pressure_Filter : PWControl.LowPassFilter_R;
 	PP_Water_ActualPressure : REAL;
 	Oil_Pressure_Filter : PWControl.LowPassFilter_R;
@@ -981,17 +985,32 @@ rError_W := rTargetCorrected_W - GVL_PulsePressure.PP_Water_ActualPressure;
 GVL_PulsePressure.PP_Water_PressureError := rError_W;
 
 // ---- 4. PID 反馈 ----
-// 直线波 (iWaveTypeNow=6)：使用爆破 PID 增益(Burst_Kp/Ki)，进入直线模式时复位积分
-// 其它波形：使用脉冲 PID 增益(PID_Kp/Ki)；从直线退回时也复位一次，清理可能残留的积分
+// 直线波 (iWaveTypeNow=6)：用脉冲侧 PID_Kp/Ki，但算法照爆破——
+//   相位 0(升压): rVirtualTarget 还没到 PMax，Ki=0 防止积分窜入
+//   相位 1(保压): rVirtualTarget = PMax，Ki 取 PP_Water_PID_Ki 消除稳态误差
+//   相位切换：bResetIntegral 仅复位积分项，保留 P 输出连续性
+//   进/出直线模式：bReset 完全复位
 IF iWaveTypeNow = 6 THEN
+    IF ABS(fbILC_W.rVirtualTarget - GVL_PulsePressure.PP_Water_TargetPressure) < 0.01 THEN
+        iLinearPhaseW := 1;  // 保压
+    ELSE
+        iLinearPhaseW := 0;  // 升压
+    END_IF
+    IF iLinearPhaseW = 1 THEN
+        rKiEff_W := GVL_PulsePressure.PP_Water_PID_Ki;
+    ELSE
+        rKiEff_W := 0.0;
+    END_IF
     fbPID_W(
-        bEnable := TRUE,
-        rError  := rError_W,
-        rDt     := rDt,
-        bReset  := (iLastWaveTypeW <> 6),
-        rPID_Kp := GVL_PulsePressure.PP_Water_Burst_Kp,
-        rPID_Ki := GVL_PulsePressure.PP_Water_Burst_Ki
+        bEnable        := TRUE,
+        rError         := rError_W,
+        rDt            := rDt,
+        bReset         := (iLastWaveTypeW <> 6),
+        bResetIntegral := (iLinearPhaseW <> iLinearPhasePrevW),
+        rPID_Kp        := GVL_PulsePressure.PP_Water_PID_Kp,
+        rPID_Ki        := rKiEff_W
     );
+    iLinearPhasePrevW := iLinearPhaseW;
 ELSE
     fbPID_W(
         bEnable := TRUE,
@@ -1001,6 +1020,7 @@ ELSE
         rPID_Kp := GVL_PulsePressure.PP_Water_PID_Kp,
         rPID_Ki := GVL_PulsePressure.PP_Water_PID_Ki
     );
+    iLinearPhasePrevW := 0;  // 离开直线模式：重置相位状态供下次进入
 END_IF
 iLastWaveTypeW := iWaveTypeNow;
 rUPid_W := fbPID_W.rOutput;
@@ -1111,16 +1131,28 @@ rError_O := rTargetCorrected_O - GVL_PulsePressure.PP_Oil_ActualPressure;
 GVL_PulsePressure.PP_Oil_PressureError := rError_O;
 
 // ---- 4. PID 反馈 ----
-// 直线波 (iWaveTypeNow=6)：使用爆破 PID 增益(Burst_Kp/Ki)，进入直线模式时复位积分
+// 直线波 (iWaveTypeNow=6)：用脉冲侧 PID_Kp/Ki，但算法照爆破——相位 0 Ki=0，相位 1 启 Ki
 IF iWaveTypeNow = 6 THEN
+    IF ABS(fbILC_O.rVirtualTarget - GVL_PulsePressure.PP_Oil_TargetPressure) < 0.01 THEN
+        iLinearPhaseO := 1;
+    ELSE
+        iLinearPhaseO := 0;
+    END_IF
+    IF iLinearPhaseO = 1 THEN
+        rKiEff_O := GVL_PulsePressure.PP_Oil_PID_Ki;
+    ELSE
+        rKiEff_O := 0.0;
+    END_IF
     fbPID_O(
-        bEnable := TRUE,
-        rError  := rError_O,
-        rDt     := rDt,
-        bReset  := (iLastWaveTypeO <> 6),
-        rPID_Kp := GVL_PulsePressure.PP_Oil_Burst_Kp,
-        rPID_Ki := GVL_PulsePressure.PP_Oil_Burst_Ki
+        bEnable        := TRUE,
+        rError         := rError_O,
+        rDt            := rDt,
+        bReset         := (iLastWaveTypeO <> 6),
+        bResetIntegral := (iLinearPhaseO <> iLinearPhasePrevO),
+        rPID_Kp        := GVL_PulsePressure.PP_Oil_PID_Kp,
+        rPID_Ki        := rKiEff_O
     );
+    iLinearPhasePrevO := iLinearPhaseO;
 ELSE
     fbPID_O(
         bEnable := TRUE,
@@ -1130,6 +1162,7 @@ ELSE
         rPID_Kp := GVL_PulsePressure.PP_Oil_PID_Kp,
         rPID_Ki := GVL_PulsePressure.PP_Oil_PID_Ki
     );
+    iLinearPhasePrevO := 0;
 END_IF
 iLastWaveTypeO := iWaveTypeNow;
 rUPid_O := fbPID_O.rOutput;
