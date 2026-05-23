@@ -19,6 +19,8 @@ VAR_INPUT
 	rWHRingFrac     : REAL := 0.07;  // [水锤] 段 2: 过冲衰减段归一化相位宽 (= rRing)
 	rWHHoldFrac     : REAL := 0.35;  // [水锤] 段 3: PMax 保压段归一化相位宽 (= rH)
 	rWHFallFrac     : REAL := 0.05;  // [水锤] 段 4: 下降段归一化相位宽 (= rF); 段 5 (低保持) = 1 - 上述 4 段
+	rEnvUpper       : REAL := 0.0;   // ARP1383C 包络上限 (MPa); 0 ⇒ 禁用包络门控 (退化为每周期都学习)
+	rEnvLower       : REAL := 0.0;   // ARP1383C 包络下限 (MPa)
 END_VAR
 VAR_OUTPUT
 	rOutput        : REAL;           // 修正量 = rVirtualTarget - rTargetRaw (MPa)
@@ -69,6 +71,8 @@ VAR
 	bNewCyclePrev    : BOOL;
 	iIterCount       : INT;
 	bVInitialized    : BOOL;         // vMax/vMin 已初始化
+	bCycleHadViolation : BOOL;       // 本周期内 actual 是否曾越出包络
+	bDoLearnNow        : BOOL;       // 本周期是否执行学习 (在 bNewCycle 边界捕获)
 	nUpdateCount     : INT;
 	rPeakErrSum      : REAL;
 	rValleyErrSum    : REAL;
@@ -248,6 +252,8 @@ IF bReset OR NOT bEnable THEN
     rWHHoldSum := 0.0; iWHHoldCount := 0;
     rWHLowSum  := 0.0; iWHLowCount  := 0;
     bNewCyclePrev  := FALSE;
+    bCycleHadViolation := FALSE;
+    bDoLearnNow        := FALSE;
     IF NOT bEnable THEN
         RETURN;
     END_IF
@@ -275,6 +281,18 @@ END_IF
 // 新周期边界
 // ============================================================
 IF bNewCycle AND NOT bNewCyclePrev THEN
+
+    // 包络门控: 仅当本周期 actual 越出 [rEnvLower, rEnvUpper] 时才学习。
+    // 包络未配置 (rEnvUpper <= rEnvLower) 时退化为"每周期都学习", 兼容旧调用。
+    bDoLearnNow := bCycleHadViolation OR (rEnvUpper <= rEnvLower);
+    bCycleHadViolation := FALSE;  // 立即重置, 下一周期重新累积
+
+    // 水锤段累加器每周期复位 (无论是否学习, 否则下周期 actual 会叠加到旧值上)
+    IF nWaveType = 2 THEN
+        rWHOSPeakActual := -1.0E30;
+        rWHHoldSum := 0.0; iWHHoldCount := 0;
+        rWHLowSum  := 0.0; iWHLowCount  := 0;
+    END_IF
 
     // RMS
     IF iErrorCount > 0 THEN
@@ -365,7 +383,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
 
         IF iMaxIterations > 0 AND iIterCount >= iMaxIterations THEN
             bConverged := TRUE;
-        ELSE
+        ELSIF bDoLearnNow THEN  // 包络越界才学习 (本周期内 actual 曾越出 rEnvLower..rEnvUpper)
             // α 8 段自学习 (正弦 nWaveType=0)
             IF bAlphaEnable AND nWaveType = 0 THEN
                 FOR iBinK := 1 TO 8 DO
@@ -505,10 +523,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
                 IF rVMax  <= rVMin + 0.001 THEN rVMax  := rVMin + 0.001;  END_IF
                 IF rVPeak < rVMax              THEN rVPeak := rVMax;        END_IF
-                // 复位累加器 (下周期重新统计)
-                rWHOSPeakActual := -1.0E30;
-                rWHHoldSum := 0.0; iWHHoldCount := 0;
-                rWHLowSum  := 0.0; iWHLowCount  := 0;
+                // 累加器复位已上提到 bNewCycle 入口 (无论是否学习都需要复位)
             END_IF
         END_IF
     END_IF
@@ -548,6 +563,13 @@ END_IF
 // ============================================================
 // 每个采样点
 // ============================================================
+
+// 包络越界跟踪 (本周期内有任一采样越界 → bDoLearnNow 在下一个 bNewCycle 被置 TRUE)
+IF rEnvUpper > rEnvLower THEN
+    IF (rActual > rEnvUpper) OR (rActual < rEnvLower) THEN
+        bCycleHadViolation := TRUE;
+    END_IF
+END_IF
 
 // 周期相位
 IF iPointsPerCycle > 0 THEN

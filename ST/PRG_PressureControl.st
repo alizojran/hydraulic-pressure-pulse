@@ -227,7 +227,9 @@ CASE iState OF
         rWHRiseFrac     := fbWaveGen_O.rSegRise,
         rWHRingFrac     := fbWaveGen_O.rSegRing,
         rWHHoldFrac     := fbWaveGen_O.rSegHold,
-        rWHFallFrac     := fbWaveGen_O.rSegFall
+        rWHFallFrac     := fbWaveGen_O.rSegFall,
+        rEnvUpper       := fbWaveGen_O.rTargetUpper,  // ARP1383C 包络: 在包络内停学习, 越界才学习
+        rEnvLower       := fbWaveGen_O.rTargetLower
     );
     rIlcCorrection_O := fbILC_O.rOutput;                                 // MPa
     rTargetCorrected_O := fbWaveGen_O.rTarget + rIlcCorrection_O;        // MPa
