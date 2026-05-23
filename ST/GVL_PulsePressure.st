@@ -21,15 +21,6 @@ VAR_GLOBAL
 	PP_Oil_LowDwellPct : REAL; // 油路水锤波低保持段时间占比(默认0.48)，5段相对权重内部归一化
 	PP_Oil_HighLimit : REAL; // 油路高压保护限值(MPa)
 	PP_Oil_TargetCycles : REAL; // 目标循环次数
-	PP_Oil_VBase : REAL; // 油路基础容积(m³) — 管路+缸体
-	PP_Oil_VSpecimen : REAL; // 油路被试件容积(m³)
-	PP_Oil_Kv : REAL; // 油路阀流量增益(m³/s/V/√Pa) — 由样本参数反推(诊断回读)
-	PP_Oil_TauValve : REAL; // 油路阀时间常数(s) — 由样本参数反推(诊断回读)
-	PP_Oil_ValveQnom : REAL; // 油路阀额定流量(L/min)，查阀样本
-	PP_Oil_ValveDPnom : REAL; // 油路阀额定压降(bar/每节流边)，查阀样本
-	PP_Oil_ValveUmax : REAL; // 油路阀额定信号最大值(V)
-	PP_Oil_ValveDynMode : REAL; // 油路阀动态参数模式: 0=频响频率(Hz), 1=阶跃时间(ms)
-	PP_Oil_ValveDynParam : REAL; // 油路阀动态参数: 模式0为-3dB频率(Hz), 模式1为阶跃时间(ms)
 	PP_Oil_ILC_Enable : REAL; // 油路迭代学习控制使能
 	PP_Oil_ILC_MaxIter : REAL; // 油路ILC最大迭代次数
 	PP_Oil_ILC_LearningRate : REAL; // 油路ILC学习率(0~1)，0=使用容积自适应默认值
@@ -39,11 +30,8 @@ VAR_GLOBAL
 	PP_Oil_CycleReset : REAL; // 油路循环计数清零命令(上升沿有效)
 	PP_Hydro_HighLimit : REAL; // 液压站高压保护限值(MPa)
 	PP_Hydro_TempLimit : REAL; // 液压油温度保护限值(°C)
-	PP_Hydro_WorkingPressure : REAL; // 液压站工作压力设定值(MPa)，即供油压力Ps
 	PP_Hydro_PumpCmd : REAL; // 液压泵启停命令
 	PP_Hydro_MotorSpeed : REAL; // 液压泵电机转速设定值(rpm)
-	PP_Sys_BetaE : REAL; // 液压油体积弹性模量(Pa)，默认1.4e9
-	PP_Sys_CLeak : REAL; // 系统泄漏系数，默认1.0e-12
 	PP_IO_OutputBits : REAL; // 数字量输出控制
 	PP_IO_OilCircuitSel : REAL; // 油路选通
 	PP_FrameCounter_PLC : REAL; // PLC帧计数器（每10ms递增）
@@ -68,8 +56,7 @@ VAR_GLOBAL
 	PP_Oil_TargetLower : REAL; // 油路 ARP1383C 下包络 (MPa) — 实际压力允许下限
 	PP_Oil_EnvPctP : REAL; // ARP1383C 包络压力容差 ×PMax (默认 0.05 = 5%)
 	PP_Oil_EnvPctT : REAL; // ARP1383C 包络时间容差 ×周期 (默认 0.10 = 10%)
-	PP_Oil_MFF_Output : REAL; // 油路模型前馈输出(V)
-	PP_Oil_ILC_Output : REAL; // 油路ILC学习输出(V)
+	PP_Oil_ILC_Output : REAL; // 油路 ILC 指令修正量(MPa) — 加到 rTarget 上做虚拟目标
 	PP_Oil_ILC_Iteration : REAL; // 油路ILC当前迭代次数
 	PP_Oil_PID_Output : REAL; // 油路 PID 反馈输出(V)
 	PP_Oil_PID_Integral : REAL; // 油路 PID 积分项(V) (诊断)
