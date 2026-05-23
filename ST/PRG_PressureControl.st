@@ -42,7 +42,7 @@ END_VAR
 *}
 
 //剂侧产品端压力 — 默认使用26.01低压传感器(可根据需要切换27.01)
-PP_Oil_ActualPressure := PRG_DeviceControl.toPC_Pressure_26_01;
+PP_Oil_ActualPressure := GVL_PulsePressure.PP_Dev_Pressure_26_01;
 Oil_Pressure_Filter(in:= PP_Oil_ActualPressure,t:= T#100MS);
 GVL_PulsePressure.PP_Oil_ActualPressure := Oil_Pressure_Filter.out;
 
@@ -96,12 +96,9 @@ END_IF
 
 // ============================================================
 // 通道选择（只有油路）
-// 始终走剂侧测试: 开启10.01、10.03，关闭10.02、10.04
+// 始终走剂侧测试: 油路通断阀 10.01/10.03 打开
+// 实际硬件驱动由 PRG_DeviceControl（待重写）从 GVL_GPIO 直接读取
 // ============================================================
-PRG_DeviceControl.fromPC_TD_Valve_10_01 := TRUE;
-PRG_DeviceControl.fromPC_TD_Valve_10_02 := FALSE;
-PRG_DeviceControl.fromPC_TD_Valve_10_03 := TRUE;
-PRG_DeviceControl.fromPC_TD_Valve_10_04 := FALSE;
 
 
 
@@ -292,10 +289,10 @@ END_CASE
 IF GVL_PulsePressure.PP_Oil_ActualPressure > GVL_PulsePressure.PP_Oil_HighLimit
    AND GVL_PulsePressure.PP_Oil_HighLimit > 0.0 THEN
     PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O := 0.0;
-	PRG_DeviceControl.fromPC_Pne_Valve_YV7 := TRUE;
+	GVL_PulsePressure.PP_Dev_PneValve_YV7 := 1.0;  // 待 PRG_DeviceControl 驱动 YV7 硬件
     iState := 5;
 ELSE
-	PRG_DeviceControl.fromPC_Pne_Valve_YV7 := FALSE;
+	GVL_PulsePressure.PP_Dev_PneValve_YV7 := 0.0;
 END_IF
 
 // ============================================================

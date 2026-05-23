@@ -12,7 +12,7 @@ VAR_GLOBAL
 	PP_Oil_TargetPressure : REAL; // 油路目标峰值压力(MPa) = PMax
 	PP_Oil_MinPressure : REAL; // 油路最低压力(MPa) = PMin
 	PP_Oil_Frequency : REAL; // 油路脉冲频率(Hz)
-	PP_Oil_WaveType : REAL; // 波形类型 0=正弦 3=梯形 5=ARP1383水锤波
+	PP_Oil_WaveType : REAL; // 波形类型 0=正弦 1=梯形 2=ARP1383水锤波
 	PP_Oil_RisePct : REAL; // 梯形/水锤波上升段占比
 	PP_Oil_HoldPct : REAL; // 梯形/水锤波保持段占比
 	PP_Oil_FallPct : REAL; // 梯形/水锤波下降段占比
@@ -77,4 +77,13 @@ VAR_GLOBAL
 	PP_TCPIP_CommCycle : REAL; // TCP/IP实际通讯周期(ms)
 	PP_PLC_Timestamp_Low : REAL; // PLC时间戳低32位(ms)
 	PP_PLC_Timestamp_High : REAL; // PLC时间戳高32位
+
+	// =========================================================
+	// 设备控制接口占位 (PRG_DeviceControl 待重写后填充)
+	// 这些 GVL 变量取代了原 PRG_DeviceControl 的 toPC_*/fromPC_* 接口，
+	// 由具体的设备驱动程序（待写）负责读写。
+	// =========================================================
+	PP_Dev_Pressure_26_01 : REAL; // 油路低压传感器(MPa) ← 由 HydraulicUnit_Control 写入
+	PP_Dev_Pressure_27_01 : REAL; // 油路高压传感器(MPa) ← 由 HydraulicUnit_Control 写入
+	PP_Dev_PneValve_YV7 : REAL; // 油路高压保护阀指令 → 待新 PRG_DeviceControl 读取并驱动硬件
 END_VAR

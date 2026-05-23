@@ -201,24 +201,26 @@ rOUT_6 :=Pressure_32_04;
 //压力传感器26.01
 {AD2满量程0-32767；1-5V对应3277-16384}
 AnalogCollect_X1_605(
-	Input:= PWMotion.FPGAData.AD2 , 
-	In_Hi_Limit:= 16384 , 
-	In_Lo_Limit:= 3277 , 
-	Out_Hi_Limit:= 5.0 , 
-	Out_Lo_Limit:= 0.0 , 
+	Input:= PWMotion.FPGAData.AD2 ,
+	In_Hi_Limit:= 16384 ,
+	In_Lo_Limit:= 3277 ,
+	Out_Hi_Limit:= 5.0 ,
+	Out_Lo_Limit:= 0.0 ,
 	Collect_Out=> Pressure_26_01 );
 rOUT_8 :=Pressure_26_01;
+GVL_PulsePressure.PP_Dev_Pressure_26_01 := Pressure_26_01;  // 导出到 GVL 供 PressureControl 读取
 
 //压力传感器27.01
 {AD3满量程0-32767；1-5V对应3277-16384}
 AnalogCollect_X1_606(
-	Input:= PWMotion.FPGAData.AD3 , 
-	In_Hi_Limit:= 16384 , 
-	In_Lo_Limit:= 3277 , 
-	Out_Hi_Limit:= 15.0 , 
-	Out_Lo_Limit:= 0.0 , 
+	Input:= PWMotion.FPGAData.AD3 ,
+	In_Hi_Limit:= 16384 ,
+	In_Lo_Limit:= 3277 ,
+	Out_Hi_Limit:= 15.0 ,
+	Out_Lo_Limit:= 0.0 ,
 	Collect_Out=> Pressure_27_01 );
 rOUT_9 :=Pressure_27_01;
+GVL_PulsePressure.PP_Dev_Pressure_27_01 := Pressure_27_01;
 
 //---------------------------------------------------------------------------//
 //CT-4158输出压力26.01

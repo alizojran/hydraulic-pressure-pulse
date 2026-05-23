@@ -4,7 +4,7 @@ VAR_INPUT
 	rPMin : REAL; // 最低压力 (MPa)
 	rPMax : REAL; // 最高压力 (MPa)
 	rFrequency : REAL; // 脉冲频率 (Hz)
-	iWaveType : INT; // 波形类型 0=正弦 3=梯形 5=ARP1383水锤波
+	iWaveType : INT; // 波形类型 0=正弦 1=梯形 2=ARP1383水锤波
 	rRisePct : REAL; // 梯形/水锤波上升段占比，默认0.1
 	rHoldPct : REAL; // 梯形/水锤波保持段占比，默认0.3
 	rFallPct : REAL; // 梯形/水锤波下降段占比，默认0.1
@@ -136,7 +136,7 @@ CASE iWaveType OF
     rTarget := (rPMax + rPMin) / 2.0
                - (rPMax - rPMin) / 2.0 * COS(2.0 * PI * rPhase);
 
-3:  // 梯形波
+1:  // 梯形波
     // 【梯形波分段计算】
     // 梯形波四段组成:
     //   rR% 上升段: PMin 线性升至 PMax
@@ -177,7 +177,7 @@ CASE iWaveType OF
         rTarget := rPMin;
     END_IF
 
-5:  // ARP1383C Fig.2 水锤波形 (水锤型 / Water Hammer) — 指令面五段
+2:  // ARP1383C Fig.2 水锤波形 (水锤型 / Water Hammer) — 指令面五段
     // 【五段组成 — 全部由用户显式设置，内部归一化为 sum=1】
     //   rR     上升段:      指令步进到过冲峰 P_OS (无斜率)
     //   rRing  过冲后稳定段: 指令步进到 PMax (快速从过冲峰回到正常压力)
@@ -288,7 +288,7 @@ IF nMffLeadSteps > 0 THEN
     0:  // 正弦波
         rTargetLead := (rPMax + rPMin) / 2.0
                        - (rPMax - rPMin) / 2.0 * COS(2.0 * PI * rPhaseLead);
-    3:  // 梯形波
+    1:  // 梯形波
         IF rPhaseLead < rR THEN
             rTargetLead := rPMin + (rPMax - rPMin) * (rPhaseLead / rR);
         ELSIF rPhaseLead < (rR + rH) THEN
@@ -298,7 +298,7 @@ IF nMffLeadSteps > 0 THEN
         ELSE
             rTargetLead := rPMin;
         END_IF
-    5:  // ARP1383C 水锤波形（公式与主波形相同，使用超前相位）
+    2:  // ARP1383C 水锤波形（公式与主波形相同，使用超前相位）
         // 参数副本 rR/rRing/rH/rF/rLow/rOS/rPeakOS 已在主分支中赋值并归一化
         IF rPhaseLead < rR THEN
             rTargetLead := rPeakOS;
