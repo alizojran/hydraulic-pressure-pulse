@@ -4,14 +4,14 @@ VAR_INPUT
 	rPMin : REAL; // 最低压力 (MPa)
 	rPMax : REAL; // 最高压力 (MPa)
 	rFrequency : REAL; // 脉冲频率 (Hz)
-	iWaveType : INT; // 波形类型 0=正弦 1=方波 2=三角 3=梯形 4=自定义LUT 5=ARP1383阻尼波(水锤)
+	iWaveType : INT; // 波形类型 0=正弦 1=方波 2=三角 3=梯形 4=自定义LUT 5=ARP1383水锤波
 	rDutyCycle : REAL; // 方波占空比 (0~1)，默认0.5
-	rRisePct : REAL; // 梯形/阻尼波上升段占比，默认0.1
-	rHoldPct : REAL; // 梯形/阻尼波保持段占比，默认0.3
-	rFallPct : REAL; // 梯形/阻尼波下降段占比，默认0.1
-	rOvershoot : REAL; // 阻尼波过冲幅值占比 = (Pos-Pmax)/(Pmax-Pmin)，默认0.10
-	rRingPct : REAL; // 阻尼波振荡段占比，默认0.07
-	rDamping : REAL; // 阻尼波阻尼比 ζ (0~1)，默认0.20
+	rRisePct : REAL; // 梯形/水锤波上升段占比，默认0.1
+	rHoldPct : REAL; // 梯形/水锤波保持段占比，默认0.3
+	rFallPct : REAL; // 梯形/水锤波下降段占比，默认0.1
+	rOvershoot : REAL; // 水锤波过冲幅值占比 = (Pos-Pmax)/(Pmax-Pmin)，默认0.10
+	rRingPct : REAL; // 水锤波振荡段占比，默认0.07
+	rDamping : REAL; // 水锤波阻尼比 ζ (0~1)，默认0.20
 	rDt : REAL; // 控制周期 (s)
 	bReset : BOOL; // 复位相位
 	nMffLeadSteps : INT; // MFF超前步数: 提前N步计算目标值给MFF使用
@@ -40,19 +40,19 @@ VAR
 	rF : REAL; // 下降段占比
 	rL : REAL; // 低保持段占比
 	rPhaseLead : REAL; // 超前相位值
-	rOS : REAL; // 阻尼波过冲幅值占比 (本地副本+保护)
-	rRing : REAL; // 阻尼波振荡段占比 (本地副本+保护)
-	rZeta : REAL; // 阻尼波阻尼比 ζ (本地副本+保护)
-	rPeakOS : REAL; // 阻尼波过冲峰压力 = Pmax + rOS*(Pmax-Pmin)
-	rRingX : REAL; // 阻尼波振荡段归一化时间 [0,1]
-	rOmegaT : REAL; // 阻尼波瞬时角度 ω·t = 2π·RING_CYCLES·x
-	rDecay : REAL; // 阻尼波包络指数衰减因子 exp(-ζ·ω·t)
+	rOS : REAL; // 水锤波过冲幅值占比 (本地副本+保护)
+	rRing : REAL; // 水锤波振荡段占比 (本地副本+保护)
+	rZeta : REAL; // 水锤波阻尼比 ζ (本地副本+保护)
+	rPeakOS : REAL; // 水锤波过冲峰压力 = Pmax + rOS*(Pmax-Pmin)
+	rRingX : REAL; // 水锤波振荡段归一化时间 [0,1]
+	rOmegaT : REAL; // 水锤波瞬时角度 ω·t = 2π·RING_CYCLES·x
+	rDecay : REAL; // 水锤波包络指数衰减因子 exp(-ζ·ω·t)
 END_VAR
 VAR CONSTANT
 	PI : REAL := 3.14159265358979;
 	RISE_RATIO_SQUARE : REAL := 0.08; // 方波过渡段占比
 	MAX_LUT_POINTS : INT := 2000; // LUT最大点数
-	RING_CYCLES : REAL := 3.0; // 阻尼波振荡段内的振铃次数（ARP1383 Fig.2 典型 ~3 周）
+	RING_CYCLES : REAL := 3.0; // 水锤波振荡段内的振铃次数（ARP1383 Fig.2 典型 ~3 周）
 END_VAR
 
 
@@ -232,7 +232,7 @@ CASE iWaveType OF
 4:  // ★ 自定义波形 — 查表 + 线性插值
     LutInterpolate();
 
-5:  // ARP1383C Fig.2 阻尼波形 (水锤型 / Water Hammer)
+5:  // ARP1383C Fig.2 水锤波形 (水锤型 / Water Hammer)
     // 【五段组成】
     //   rR%        快速上升段: PMin → P_overshoot (过冲峰)
     //   rRing%     阻尼振荡段: 围绕 PMax 衰减振铃
@@ -369,7 +369,7 @@ IF nMffLeadSteps > 0 THEN
             rTargetLead := (rPMax + rPMin) / 2.0
                            - (rPMax - rPMin) / 2.0 * COS(2.0 * PI * rPhaseLead);
         END_IF
-    5:  // ARP1383C 阻尼波形（公式与主波形相同，使用超前相位）
+    5:  // ARP1383C 水锤波形（公式与主波形相同，使用超前相位）
         // 参数副本 rR/rH/rF/rOS/rRing/rZeta/rPeakOS 已在主分支中赋值并通过保护
         IF rPhaseLead < rR THEN
             rTargetLead := rPMin + (rPeakOS - rPMin) * (rPhaseLead / rR);
