@@ -28,6 +28,12 @@ VAR_OUTPUT
 	bNewCycle : BOOL; // 新周期开始脉冲 (相位过零)
 	iPointIndex : INT; // 当前周期内采样点索引
 	iPointsPerCycle : INT; // 每周期总采样点数
+	// 归一化段宽 (供下游 FB_ILC 水锤波 5 段学习使用; 与内部计算同步)
+	rSegRise : REAL; // 上升/过冲段归一化相位宽
+	rSegRing : REAL; // (仅水锤) ring 衰减段归一化相位宽; 其他波形为 0
+	rSegHold : REAL; // 保压段归一化相位宽
+	rSegFall : REAL; // 下降段归一化相位宽
+	rPeakOSOut : REAL; // (仅水锤) 过冲峰目标压力 (MPa); 其他波形 = rPMax
 END_VAR
 VAR
 	rPhaseAcc : REAL; // 相位累加器 (0~1)
@@ -155,6 +161,13 @@ ELSE
     rRing := 0.0;
     rPeakOS := rPMax;
 END_CASE
+
+// 段宽输出 (供下游 FB_ILC)
+rSegRise   := rR;
+rSegRing   := rRing;
+rSegHold   := rH;
+rSegFall   := rF;
+rPeakOSOut := rPeakOS;
 
 
 // ============================================================
