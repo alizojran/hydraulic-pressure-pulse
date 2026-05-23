@@ -19,7 +19,7 @@ VAR_GLOBAL
 	PP_Water_FallPct : REAL; // 梯形/水锤波下降段占比
 	PP_Water_Overshoot : REAL; // 水路水锤波过冲幅值占比(默认0.10)，按ARP1383 Fig.2 容差
 	PP_Water_RingPct : REAL; // 水路水锤波振荡段时间占比(默认0.07)
-	PP_Water_Damping : REAL; // 水路水锤波阻尼比ζ(默认0.20)
+	PP_Water_LowDwellPct : REAL; // 水路水锤波低保持段时间占比(默认0.48)，5段相对权重内部归一化
 	PP_Water_HighLimit : REAL; // 水路高压保护限值(MPa)
 	PP_Water_TargetCycles : REAL; // 目标循环次数
 	PP_Water_VBase : REAL; // 水路基础容积(m³) — 管路+缸体
@@ -48,7 +48,7 @@ VAR_GLOBAL
 	PP_Oil_FallPct : REAL; // 梯形/水锤波下降段占比
 	PP_Oil_Overshoot : REAL; // 油路水锤波过冲幅值占比(默认0.10)，按ARP1383 Fig.2 容差
 	PP_Oil_RingPct : REAL; // 油路水锤波振荡段时间占比(默认0.07)
-	PP_Oil_Damping : REAL; // 油路水锤波阻尼比ζ(默认0.20)
+	PP_Oil_LowDwellPct : REAL; // 油路水锤波低保持段时间占比(默认0.48)，5段相对权重内部归一化
 	PP_Oil_HighLimit : REAL; // 油路高压保护限值(MPa)
 	PP_Oil_TargetCycles : REAL; // 目标循环次数
 	PP_Oil_VBase : REAL; // 油路基础容积(m³) — 管路+缸体

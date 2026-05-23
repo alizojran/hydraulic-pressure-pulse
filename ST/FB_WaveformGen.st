@@ -11,7 +11,7 @@ VAR_INPUT
 	rFallPct : REAL; // 梯形/水锤波下降段占比，默认0.1
 	rOvershoot : REAL; // 水锤波过冲幅值占比 = (Pos-Pmax)/(Pmax-Pmin)，默认0.10
 	rRingPct : REAL; // 水锤波振荡段占比，默认0.07
-	rDamping : REAL; // 水锤波阻尼比 ζ (0~1)，默认0.20
+	rLowDwellPct : REAL; // 水锤波低保持段占比，默认0.48 (5段相对权重，内部归一化)
 	rDt : REAL; // 控制周期 (s)
 	bReset : BOOL; // 复位相位
 	nMffLeadSteps : INT; // MFF超前步数: 提前N步计算目标值给MFF使用
@@ -41,8 +41,9 @@ VAR
 	rL : REAL; // 低保持段占比
 	rPhaseLead : REAL; // 超前相位值
 	rOS : REAL; // 水锤波过冲幅值占比 (本地副本+保护)
-	rRing : REAL; // 水锤波振荡段占比 (本地副本+保护)
-	rZeta : REAL; // 水锤波阻尼比 ζ (本地副本+保护)
+	rRing : REAL; // 水锤波振荡段占比 (本地副本+保护后并归一化)
+	rLow : REAL; // 水锤波低保持段占比 (本地副本+保护后并归一化)
+	rSum : REAL; // 水锤波 5 段占比和 (用于归一化)
 	rPeakOS : REAL; // 水锤波过冲峰压力 = Pmax + rOS*(Pmax-Pmin)
 	rRingX : REAL; // 水锤波振荡段归一化时间 [0,1]
 	rOmegaT : REAL; // 水锤波瞬时角度 ω·t = 2π·RING_CYCLES·x
@@ -53,6 +54,7 @@ VAR CONSTANT
 	RISE_RATIO_SQUARE : REAL := 0.08; // 方波过渡段占比
 	MAX_LUT_POINTS : INT := 2000; // LUT最大点数
 	RING_CYCLES : REAL := 3.0; // 水锤波振荡段内的振铃次数（ARP1383 Fig.2 典型 ~3 周）
+	ZETA_DAMPING : REAL := 0.20; // 水锤波阻尼比 ζ（内化常数，振铃在 RING_CYCLES 周内衰减至 ~3%）
 END_VAR
 
 
@@ -233,12 +235,12 @@ CASE iWaveType OF
     LutInterpolate();
 
 5:  // ARP1383C Fig.2 水锤波形 (水锤型 / Water Hammer)
-    // 【五段组成】
-    //   rR%        快速上升段: PMin → P_overshoot (过冲峰)
-    //   rRing%     阻尼振荡段: 围绕 PMax 衰减振铃
-    //   保压段:    Pmax 平直 (= 1 - rR - rRing - rF - rL)
-    //   rF%        下降段: Pmax → PMin
-    //   rL%        低保持段: PMin
+    // 【五段组成 — 全部由用户显式设置，内部归一化为 sum=1】
+    //   rR     快速上升段: PMin → P_overshoot (过冲峰)
+    //   rRing  阻尼振荡段: 围绕 PMax 衰减振铃
+    //   rH     保压段:    Pmax 平直
+    //   rF     下降段: Pmax → PMin
+    //   rLow   低保持段: PMin
     //
     // 【对应 ARP1383C 标准】
     //   起始陡升过 Pmax 形成尖峰 (1.0~1.1 P_oper 容差带)
@@ -253,24 +255,39 @@ CASE iWaveType OF
     // 【阻尼振荡公式】
     //   P(x) = PMax + (P_OS - PMax) × exp(-ζ·ω·x) × cos(ω·x)
     //   ω·x = 2π × RING_CYCLES × (φ - rR)/rRing,  x ∈ [0,1]
-    //   ζ = rDamping (默认 0.20)
+    //   ζ = ZETA_DAMPING (内化常数 0.20，端点残幅 ~3%)
     //   RING_CYCLES = 3 周振铃 (常数)
     //   衰减后趋于 PMax，与平直保压段无缝衔接
     //
+    // 【段时间归一化】
+    //   读入 5 段相对权重后强制 sum = 1.0:
+    //       rSum = rR + rRing + rH + rF + rLow
+    //       rR /= rSum, rRing /= rSum, rH /= rSum, rF /= rSum, rLow /= rSum
+    //   这样无论操作员输入 (5%,7%,35%,5%,48%) 还是 (1,1.4,7,1,9.6)，
+    //   结果都得到一样的归一化比例，并保证波形闭合不超出 1 周期。
+    //
     rR := rRisePct;
+    rRing := rRingPct;
     rH := rHoldPct;
     rF := rFallPct;
+    rLow := rLowDwellPct;
     IF rR < 0.01 THEN rR := 0.05; END_IF
+    IF rRing < 0.01 THEN rRing := 0.07; END_IF
     IF rH < 0.01 THEN rH := 0.35; END_IF
     IF rF < 0.01 THEN rF := 0.05; END_IF
+    IF rLow < 0.01 THEN rLow := 0.48; END_IF
+
+    rSum := rR + rRing + rH + rF + rLow;
+    IF rSum > 0.01 THEN
+        rR := rR / rSum;
+        rRing := rRing / rSum;
+        rH := rH / rSum;
+        rF := rF / rSum;
+        rLow := rLow / rSum;
+    END_IF
 
     rOS := rOvershoot;
-    rRing := rRingPct;
-    rZeta := rDamping;
     IF rOS <= 0.0 THEN rOS := 0.10; END_IF
-    IF rRing < 0.01 THEN rRing := 0.07; END_IF
-    IF rZeta <= 0.0 THEN rZeta := 0.20; END_IF
-
     rPeakOS := rPMax + rOS * (rPMax - rPMin);
 
     IF rPhase < rR THEN
@@ -280,7 +297,7 @@ CASE iWaveType OF
         // 阻尼振荡: 围绕 PMax 衰减振铃，振幅按 exp(-ζω·x) 衰减
         rRingX := (rPhase - rR) / rRing;
         rOmegaT := 2.0 * PI * RING_CYCLES * rRingX;
-        rDecay := EXP(-rZeta * rOmegaT);
+        rDecay := EXP(-ZETA_DAMPING * rOmegaT);
         rTarget := rPMax + (rPeakOS - rPMax) * rDecay * COS(rOmegaT);
     ELSIF rPhase < (rR + rRing + rH) THEN
         // 平直保压段
@@ -289,7 +306,7 @@ CASE iWaveType OF
         // 下降段
         rTarget := rPMax - (rPMax - rPMin) * ((rPhase - rR - rRing - rH) / rF);
     ELSE
-        // 低保持段
+        // 低保持段 (rLow 已归一化，与剩余 1 - rR - rRing - rH - rF 相等)
         rTarget := rPMin;
     END_IF
 
@@ -370,13 +387,13 @@ IF nMffLeadSteps > 0 THEN
                            - (rPMax - rPMin) / 2.0 * COS(2.0 * PI * rPhaseLead);
         END_IF
     5:  // ARP1383C 水锤波形（公式与主波形相同，使用超前相位）
-        // 参数副本 rR/rH/rF/rOS/rRing/rZeta/rPeakOS 已在主分支中赋值并通过保护
+        // 参数副本 rR/rRing/rH/rF/rLow/rOS/rPeakOS 已在主分支中赋值并归一化
         IF rPhaseLead < rR THEN
             rTargetLead := rPMin + (rPeakOS - rPMin) * (rPhaseLead / rR);
         ELSIF rPhaseLead < (rR + rRing) THEN
             rRingX := (rPhaseLead - rR) / rRing;
             rOmegaT := 2.0 * PI * RING_CYCLES * rRingX;
-            rDecay := EXP(-rZeta * rOmegaT);
+            rDecay := EXP(-ZETA_DAMPING * rOmegaT);
             rTargetLead := rPMax + (rPeakOS - rPMax) * rDecay * COS(rOmegaT);
         ELSIF rPhaseLead < (rR + rRing + rH) THEN
             rTargetLead := rPMax;
