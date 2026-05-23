@@ -11,7 +11,6 @@ VAR
 	fbMFF_O : FB_ModelFeedforward;
 	fbPID_O : FB_PID;
 	fbILC_O : FB_ILC;
-	fbADRC_O : FB_HydraulicADRC;
 	rVTotal_O : REAL; // 油路总容积
 	rPs_Pa : REAL; // 供油压力 (Pa)
 	rBetaE : REAL; // 体积弹性模量 (Pa) — RunOilChannel 内联后提到主 VAR
@@ -20,7 +19,7 @@ VAR
 	rUTotal_O : REAL; // 油路总控制量
 	rUMff_O : REAL;
 	rUIlc_O : REAL;
-	rUAdrc_O : REAL;
+	rUPid_O : REAL; // PID 反馈输出 (V)
 	rPrePressTarget_O : REAL;
 	rPrePressKp : REAL := 2.0; // 预加压比例增益
 	rPrePressErr_O : REAL;
@@ -329,28 +328,22 @@ CASE iState OF
     GVL_PulsePressure.PP_Oil_ILC_Output    := rUIlc_O;
     GVL_PulsePressure.PP_Oil_ILC_Iteration := INT_TO_REAL(fbILC_O.iIteration);
 
-    // ---- 5. ADRC 反馈 ----
-    fbADRC_O(
-        bEnable     := TRUE,
-        rError      := rError_O,
-        rDt         := rDt,
-        rVTotal     := rVTotal_O,
-        bReset      := FALSE,
-        rBetaE      := rBetaE,
-        rPs         := rPs_Pa,
-        rValveQnom  := GVL_PulsePressure.PP_Oil_ValveQnom,
-        rValveDPnom := GVL_PulsePressure.PP_Oil_ValveDPnom,
-        rValveUmax  := GVL_PulsePressure.PP_Oil_ValveUmax,
-        rPID_Kp     := 0.4,
-        rPID_Ki     := 0,
-        nCtrlMode   := 1
+    // ---- 5. PID 反馈 ----
+    fbPID_O(
+        bEnable := TRUE,
+        rError  := rError_O,
+        rDt     := rDt,
+        bReset  := FALSE,
+        rPID_Kp := GVL_PulsePressure.PP_Oil_PID_Kp,
+        rPID_Ki := GVL_PulsePressure.PP_Oil_PID_Ki,
+        rPID_Kd := GVL_PulsePressure.PP_Oil_PID_Kd
     );
-    rUAdrc_O := fbADRC_O.rOutput;
-    GVL_PulsePressure.PP_Oil_ADRC_Output     := rUAdrc_O;
-    GVL_PulsePressure.PP_Oil_ESO_Disturbance := fbADRC_O.rZ2;
+    rUPid_O := fbPID_O.rOutput;
+    GVL_PulsePressure.PP_Oil_PID_Output   := rUPid_O;
+    GVL_PulsePressure.PP_Oil_PID_Integral := fbPID_O.rPID_I;
 
-    // ---- 6. MFF + ILC + ADRC 三环复合 ----
-    rUTotal_O := rUMff_O + rUIlc_O + rUAdrc_O;
+    // ---- 6. MFF + ILC + PID 三环复合 ----
+    rUTotal_O := rUMff_O + rUIlc_O + rUPid_O;
     IF rUTotal_O >  10.0 THEN rUTotal_O :=  10.0; END_IF
     IF rUTotal_O < -10.0 THEN rUTotal_O := -10.0; END_IF
 

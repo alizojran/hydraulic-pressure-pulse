@@ -33,6 +33,9 @@ VAR_GLOBAL
 	PP_Oil_ILC_Enable : REAL; // 油路迭代学习控制使能
 	PP_Oil_ILC_MaxIter : REAL; // 油路ILC最大迭代次数
 	PP_Oil_ILC_LearningRate : REAL; // 油路ILC学习率(0~1)，0=使用容积自适应默认值
+	PP_Oil_PID_Kp : REAL := 2.0; // 油路 PID 比例增益 (V/MPa)
+	PP_Oil_PID_Ki : REAL := 0.5; // 油路 PID 积分增益 (V/MPa/s)
+	PP_Oil_PID_Kd : REAL := 0.005; // 油路 PID 微分增益 (V·s/MPa)
 	PP_Oil_CycleReset : REAL; // 油路循环计数清零命令(上升沿有效)
 	PP_Hydro_HighLimit : REAL; // 液压站高压保护限值(MPa)
 	PP_Hydro_TempLimit : REAL; // 液压油温度保护限值(°C)
