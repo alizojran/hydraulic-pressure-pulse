@@ -95,7 +95,7 @@ j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ControlOutput);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 38-39: MFF+ILC+ADRC 总输出(V)
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 38-39: MFF+ILC+PID 总输出(V)
 j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ValveCurrent);
@@ -149,14 +149,14 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 100-101: ILC 迭代次数
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ADRC_Output);
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_PID_Output);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 102-103: ADRC 反馈输出
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 102-103: PID 反馈输出
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ESO_Disturbance);
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_PID_Integral);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 104-105: ESO 扰动估计(MPa/s)
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 104-105: PID 积分项
 j := j + 2;
 
 // 106-127: 保留 (11 vars reserved)

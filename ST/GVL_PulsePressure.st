@@ -55,7 +55,7 @@ VAR_GLOBAL
 	PP_Oil_ActualPressure : REAL; // 油路实际压力(MPa)
 	PP_Oil_SetpointPressure : REAL; // 油路当前给定压力(MPa)
 	PP_Oil_PressureError : REAL; // 油路压力偏差(MPa)
-	PP_Oil_ControlOutput : REAL; // 油路MFF+ILC+ADRC总控制输出(V)
+	PP_Oil_ControlOutput : REAL; // 油路 MFF+ILC+PID 总控制输出(V)
 	PP_Oil_ValveCurrent : REAL; // 油路比例阀电流(mA)
 	PP_Oil_CylinderPos : REAL; // 油路缸体位移(mm)
 	PP_Oil_CyclesDone : REAL; // 油路已完成循环次数
@@ -65,8 +65,8 @@ VAR_GLOBAL
 	PP_Oil_MFF_Output : REAL; // 油路模型前馈输出(V)
 	PP_Oil_ILC_Output : REAL; // 油路ILC学习输出(V)
 	PP_Oil_ILC_Iteration : REAL; // 油路ILC当前迭代次数
-	PP_Oil_ADRC_Output : REAL; // 油路ADRC反馈输出(V)
-	PP_Oil_ESO_Disturbance : REAL; // 油路ESO扰动估计(MPa/s)
+	PP_Oil_PID_Output : REAL; // 油路 PID 反馈输出(V)
+	PP_Oil_PID_Integral : REAL; // 油路 PID 积分项(V) (诊断)
 	PP_Hydro_Pressure : REAL; // 液压站系统压力(MPa)
 	PP_Hydro_Temperature : REAL; // 液压油温度(°C)
 	PP_Hydro_OilLevel : REAL; // 液位值(mm)
