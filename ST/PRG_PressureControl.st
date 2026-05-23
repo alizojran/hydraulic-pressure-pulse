@@ -209,12 +209,7 @@ CASE iState OF
         rEnvPctT      := GVL_PulsePressure.PP_Oil_EnvPctT
     );
 
-    // 经验比例修正 (保留原 1.5MPa 分段缩放)
-    IF fbWaveGen_O.rTarget >= 1.5 THEN
-        GVL_PulsePressure.PP_Oil_SetpointPressure := 1.5 + (fbWaveGen_O.rTarget - 1.5) * 0.7;
-    ELSE
-        GVL_PulsePressure.PP_Oil_SetpointPressure := 1.5 + (fbWaveGen_O.rTarget - 1.5) * 1.4;
-    END_IF
+    GVL_PulsePressure.PP_Oil_SetpointPressure := fbWaveGen_O.rTarget;
 
     // 包络输出 → GVL (供 HMI 绘制 ARP1383C 容差带)
     GVL_PulsePressure.PP_Oil_TargetUpper := fbWaveGen_O.rTargetUpper;
