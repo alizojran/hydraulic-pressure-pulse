@@ -4,11 +4,14 @@ VAR_INPUT
 	rPMin : REAL; // 最低压力 (MPa)
 	rPMax : REAL; // 最高压力 (MPa)
 	rFrequency : REAL; // 脉冲频率 (Hz)
-	iWaveType : INT; // 波形类型 0=正弦 1=方波 2=三角 3=梯形 4=自定义LUT
+	iWaveType : INT; // 波形类型 0=正弦 1=方波 2=三角 3=梯形 4=自定义LUT 5=ARP1383阻尼波(水锤)
 	rDutyCycle : REAL; // 方波占空比 (0~1)，默认0.5
-	rRisePct : REAL; // 梯形波上升段占比，默认0.1
-	rHoldPct : REAL; // 梯形波保持段占比，默认0.3
-	rFallPct : REAL; // 梯形波下降段占比，默认0.1
+	rRisePct : REAL; // 梯形/阻尼波上升段占比，默认0.1
+	rHoldPct : REAL; // 梯形/阻尼波保持段占比，默认0.3
+	rFallPct : REAL; // 梯形/阻尼波下降段占比，默认0.1
+	rOvershoot : REAL; // 阻尼波过冲幅值占比 = (Pos-Pmax)/(Pmax-Pmin)，默认0.10
+	rRingPct : REAL; // 阻尼波振荡段占比，默认0.07
+	rDamping : REAL; // 阻尼波阻尼比 ζ (0~1)，默认0.20
 	rDt : REAL; // 控制周期 (s)
 	bReset : BOOL; // 复位相位
 	nMffLeadSteps : INT; // MFF超前步数: 提前N步计算目标值给MFF使用
@@ -37,11 +40,19 @@ VAR
 	rF : REAL; // 下降段占比
 	rL : REAL; // 低保持段占比
 	rPhaseLead : REAL; // 超前相位值
+	rOS : REAL; // 阻尼波过冲幅值占比 (本地副本+保护)
+	rRing : REAL; // 阻尼波振荡段占比 (本地副本+保护)
+	rZeta : REAL; // 阻尼波阻尼比 ζ (本地副本+保护)
+	rPeakOS : REAL; // 阻尼波过冲峰压力 = Pmax + rOS*(Pmax-Pmin)
+	rRingX : REAL; // 阻尼波振荡段归一化时间 [0,1]
+	rOmegaT : REAL; // 阻尼波瞬时角度 ω·t = 2π·RING_CYCLES·x
+	rDecay : REAL; // 阻尼波包络指数衰减因子 exp(-ζ·ω·t)
 END_VAR
 VAR CONSTANT
 	PI : REAL := 3.14159265358979;
 	RISE_RATIO_SQUARE : REAL := 0.08; // 方波过渡段占比
 	MAX_LUT_POINTS : INT := 2000; // LUT最大点数
+	RING_CYCLES : REAL := 3.0; // 阻尼波振荡段内的振铃次数（ARP1383 Fig.2 典型 ~3 周）
 END_VAR
 
 
@@ -221,6 +232,67 @@ CASE iWaveType OF
 4:  // ★ 自定义波形 — 查表 + 线性插值
     LutInterpolate();
 
+5:  // ARP1383C Fig.2 阻尼波形 (水锤型 / Water Hammer)
+    // 【五段组成】
+    //   rR%        快速上升段: PMin → P_overshoot (过冲峰)
+    //   rRing%     阻尼振荡段: 围绕 PMax 衰减振铃
+    //   保压段:    Pmax 平直 (= 1 - rR - rRing - rF - rL)
+    //   rF%        下降段: Pmax → PMin
+    //   rL%        低保持段: PMin
+    //
+    // 【对应 ARP1383C 标准】
+    //   起始陡升过 Pmax 形成尖峰 (1.0~1.1 P_oper 容差带)
+    //   随后阻尼振荡衰减进入 ±4% Pmax 容差带（≤5%周期）
+    //   平直保压区合计 ≥ 10% 周期 (典型 35%)
+    //   下降至 P_min 并停留至周期末
+    //
+    // 【过冲峰值】
+    //   P_OS = PMax + rOvershoot × (PMax - PMin)
+    //   rOvershoot=0.10 → 过冲 10%（落在 ARP1383 Fig.2 容差带内）
+    //
+    // 【阻尼振荡公式】
+    //   P(x) = PMax + (P_OS - PMax) × exp(-ζ·ω·x) × cos(ω·x)
+    //   ω·x = 2π × RING_CYCLES × (φ - rR)/rRing,  x ∈ [0,1]
+    //   ζ = rDamping (默认 0.20)
+    //   RING_CYCLES = 3 周振铃 (常数)
+    //   衰减后趋于 PMax，与平直保压段无缝衔接
+    //
+    rR := rRisePct;
+    rH := rHoldPct;
+    rF := rFallPct;
+    IF rR < 0.01 THEN rR := 0.05; END_IF
+    IF rH < 0.01 THEN rH := 0.35; END_IF
+    IF rF < 0.01 THEN rF := 0.05; END_IF
+
+    rOS := rOvershoot;
+    rRing := rRingPct;
+    rZeta := rDamping;
+    IF rOS <= 0.0 THEN rOS := 0.10; END_IF
+    IF rRing < 0.01 THEN rRing := 0.07; END_IF
+    IF rZeta <= 0.0 THEN rZeta := 0.20; END_IF
+
+    rPeakOS := rPMax + rOS * (rPMax - rPMin);
+
+    IF rPhase < rR THEN
+        // 快速上升至过冲峰
+        rTarget := rPMin + (rPeakOS - rPMin) * (rPhase / rR);
+    ELSIF rPhase < (rR + rRing) THEN
+        // 阻尼振荡: 围绕 PMax 衰减振铃，振幅按 exp(-ζω·x) 衰减
+        rRingX := (rPhase - rR) / rRing;
+        rOmegaT := 2.0 * PI * RING_CYCLES * rRingX;
+        rDecay := EXP(-rZeta * rOmegaT);
+        rTarget := rPMax + (rPeakOS - rPMax) * rDecay * COS(rOmegaT);
+    ELSIF rPhase < (rR + rRing + rH) THEN
+        // 平直保压段
+        rTarget := rPMax;
+    ELSIF rPhase < (rR + rRing + rH + rF) THEN
+        // 下降段
+        rTarget := rPMax - (rPMax - rPMin) * ((rPhase - rR - rRing - rH) / rF);
+    ELSE
+        // 低保持段
+        rTarget := rPMin;
+    END_IF
+
 ELSE
     // 默认正弦
     rTarget := (rPMax + rPMin) / 2.0
@@ -296,6 +368,22 @@ IF nMffLeadSteps > 0 THEN
         ELSE
             rTargetLead := (rPMax + rPMin) / 2.0
                            - (rPMax - rPMin) / 2.0 * COS(2.0 * PI * rPhaseLead);
+        END_IF
+    5:  // ARP1383C 阻尼波形（公式与主波形相同，使用超前相位）
+        // 参数副本 rR/rH/rF/rOS/rRing/rZeta/rPeakOS 已在主分支中赋值并通过保护
+        IF rPhaseLead < rR THEN
+            rTargetLead := rPMin + (rPeakOS - rPMin) * (rPhaseLead / rR);
+        ELSIF rPhaseLead < (rR + rRing) THEN
+            rRingX := (rPhaseLead - rR) / rRing;
+            rOmegaT := 2.0 * PI * RING_CYCLES * rRingX;
+            rDecay := EXP(-rZeta * rOmegaT);
+            rTargetLead := rPMax + (rPeakOS - rPMax) * rDecay * COS(rOmegaT);
+        ELSIF rPhaseLead < (rR + rRing + rH) THEN
+            rTargetLead := rPMax;
+        ELSIF rPhaseLead < (rR + rRing + rH + rF) THEN
+            rTargetLead := rPMax - (rPMax - rPMin) * ((rPhaseLead - rR - rRing - rH) / rF);
+        ELSE
+            rTargetLead := rPMin;
         END_IF
     ELSE
         rTargetLead := (rPMax + rPMin) / 2.0
