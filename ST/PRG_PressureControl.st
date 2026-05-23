@@ -19,9 +19,8 @@ VAR
 	rUMff_O : REAL;
 	rUIlc_O : REAL;
 	rUPid_O : REAL; // PID 反馈输出 (V)
-	rPrePressTarget_O : REAL;
-	rPrePressKp : REAL := 2.0; // 预加压比例增益
-	rPrePressErr_O : REAL;
+	rStopRampKp : REAL := 2.0; // 停止斜坡比例增益 (V/MPa)
+	rStopRampErr_O : REAL; // 停止斜坡跟踪误差 (MPa)
 	rFlushTimer : REAL; // 冲洗排气计时器(s)
 	rFlushDuration : REAL; // 冲洗排气持续时间(s) 缓存
 	rFlushOutput : REAL; // 冲洗排气阀门输出(V) 缓存
@@ -71,11 +70,24 @@ iCmdPrev := iCmd;
 
 // 命令变化时执行状态切换
 IF bCmdChanged THEN
+    // 进入冲洗或运行前复位所有控制器 (原 InitializeControllers 方法)
+    // - fbWaveGen_O 清相位累加器、计数器
+    // - fbMFF_O bEnable:=FALSE 清内部状态, 下个扫描重新使能
+    // - fbPID_O 清积分、微分
+    // - fbILC_O 清学习历史
+    IF iCmd = 1 OR iCmd = 2 THEN
+        fbWaveGen_O(bReset := TRUE);
+        fbMFF_O(bEnable := FALSE);
+        fbPID_O(bReset := TRUE);
+        fbILC_O(bReset := TRUE);
+        rPeakPressure_O := 0.0;
+        rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
+    END_IF
+
     CASE iCmd OF
         0: // 回空闲
             iState := 0;
         1: // 冲洗排气
-            InitializeControllers();
             rFlushDuration := GVL_PulsePressure.PP_FlushDuration;
             rFlushOutput := GVL_PulsePressure.PP_FlushValveOutput;
             IF rFlushOutput < 0.5 THEN rFlushOutput := 2.0; END_IF
@@ -84,7 +96,6 @@ IF bCmdChanged THEN
             iState := 1;
         2: // 运行（伺服阀直接控制压力，无需油缸到位检查/预加压）
 		    rFlushTimer := 0.0;
-            InitializeControllers();
             iState := 3;
         3: // 停止
             rStopRampVal_O := GVL_PulsePressure.PP_Oil_ActualPressure;
@@ -305,9 +316,9 @@ CASE iState OF
 // ------------------------------------------------------------
 // 状态4: 停止中 — 缓慢卸压
 // 停止斜坡机制说明:
-//   进入状态4时，rStopRampVal已在InitializeControllers中被初始化为当前实际压力值。
+//   进入状态4时 (命令 3) rStopRampVal_O 已在 CASE iCmd 中被初始化为当前实际压力。
 //   每个控制周期(1ms)按 rStopRampRate=5MPa/s 递减目标值，
-//   并用与预加压相同的比例控制(Kp=2.0)跟踪递减目标值。
+//   并用比例控制(rStopRampKp=2.0)跟踪递减目标值。
 //   这实现了从当前压力到零的平滑下降，避免直接关闭阀门导致的
 //   水锤效应或压力冲击。当实际压力降到0.5MPa以下时认为卸压完成，
 //   返回空闲状态(状态0)。
@@ -321,8 +332,8 @@ CASE iState OF
         // 即5MPa/s的卸压速率
         rStopRampVal_O := rStopRampVal_O - rStopRampRate * rDt;
         IF rStopRampVal_O < 0.0 THEN rStopRampVal_O := 0.0; END_IF
-        rPrePressErr_O := rStopRampVal_O - GVL_PulsePressure.PP_Oil_ActualPressure;
-        PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O := rPrePressKp * rPrePressErr_O;
+        rStopRampErr_O := rStopRampVal_O - GVL_PulsePressure.PP_Oil_ActualPressure;
+        PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O := rStopRampKp * rStopRampErr_O;
     ELSE
         PWMOTION.FPGAData.Axis1.Output_ManualSet := rUTotal_O := 0.0;
     END_IF

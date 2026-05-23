@@ -29,7 +29,7 @@ j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_SysState);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 2-3: 系统状态 0=空闲 1=冲洗 2=预加压 3=运行 4=停止 5=故障
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 2-3: 系统状态 0=空闲 1=冲洗 3=运行 4=停止 5=故障 (无 2)
 j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_AlarmFlags);

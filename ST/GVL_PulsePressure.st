@@ -2,7 +2,7 @@
 // 仅油路 + 军标水锤波 (V4.x 简化版)
 VAR_GLOBAL
 	PP_FrameCounter_PC : REAL; // 上位机帧计数器（心跳）
-	PP_SysCommand : REAL; // 系统命令 0=空闲 1=冲洗排气 2=运行(自动预加压) 3=停止
+	PP_SysCommand : REAL; // 系统命令 0=空闲 1=冲洗排气 2=运行 3=停止
 	PP_AlarmReset : REAL; // 报警复位（上升沿有效）
 	PP_Enable : REAL; // 系统使能
 	PP_EmergencyStop : REAL; // 急停
@@ -47,7 +47,7 @@ VAR_GLOBAL
 	PP_IO_OutputBits : REAL; // 数字量输出控制
 	PP_IO_OilCircuitSel : REAL; // 油路选通
 	PP_FrameCounter_PLC : REAL; // PLC帧计数器（每10ms递增）
-	PP_SysState : REAL; // 系统状态 0=空闲 1=冲洗排气 2=预加压 3=运行 4=停止中 5=故障
+	PP_SysState : REAL; // 系统状态 0=空闲 1=冲洗排气 3=运行 4=停止中 5=故障 (无 2: 直接控制无预加压)
 	PP_AlarmFlags : REAL; // 报警标志(32bit映射至REAL)
 	PP_TotalCyclesDone : REAL; // 累计完成循环次数
 	PP_IO_InputBits : REAL; // 数字量输入状态
