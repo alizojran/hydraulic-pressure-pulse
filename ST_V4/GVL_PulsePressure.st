@@ -25,6 +25,7 @@ VAR_GLOBAL
 	PP_Water_ILC_MaxIter : REAL; // 水路ILC最大迭代次数
 	PP_Water_ILC_LearningRate : REAL; // 水路ILC学习率(0~1)，0=使用容积自适应默认值
 	PP_Water_RiseRate : REAL; // 水路爆破升压速率(MPa/s)
+	PP_Water_LinearRate : REAL; // 水路直线波升压速率(MPa/s)，仅 PP_Trace_Flag=6 使用
 	PP_Water_BurstMaxLimit : REAL; // 水路爆破最大安全压力(MPa)；给定值到此停机，避免无限升压
 	PP_Water_Burst_Kp : REAL; // 水路爆破 PID 比例增益(V/MPa)
 	PP_Water_Burst_Ki : REAL; // 水路爆破 PID 积分增益(V/MPa/s)，仅保压段生效
@@ -50,6 +51,7 @@ VAR_GLOBAL
 	PP_Oil_ILC_MaxIter : REAL; // 油路ILC最大迭代次数
 	PP_Oil_ILC_LearningRate : REAL; // 油路ILC学习率(0~1)，0=使用容积自适应默认值
 	PP_Oil_RiseRate : REAL; // 油路爆破升压速率(MPa/s)
+	PP_Oil_LinearRate : REAL; // 油路直线波升压速率(MPa/s)，仅 PP_Trace_Flag=6 使用
 	PP_Oil_BurstMaxLimit : REAL; // 油路爆破最大安全压力(MPa)；给定值到此停机，避免无限升压
 	PP_Oil_Burst_Kp : REAL; // 油路爆破 PID 比例增益(V/MPa)
 	PP_Oil_Burst_Ki : REAL; // 油路爆破 PID 积分增益(V/MPa/s)，仅保压段生效
@@ -110,7 +112,7 @@ VAR_GLOBAL
 	PP_Hydro_PumpStatus : REAL; // 液压泵运行状态
 	PP_Hydro_FilterStatus : REAL; // 过滤器状态
 	PP_Hydro_PumpRunTime : REAL; // 液压泵累计运行时间(h)
-	PP_Trace_Flag : REAL; // PC下发波形编号(ILC学习用) 1=正弦 2=三角 3=梯形 4=矩形 5=任意
+	PP_Trace_Flag : REAL; // PC下发波形编号(ILC学习用) 1=正弦 2=三角 3=梯形 4=矩形 5=任意 6=直线
 	PP_WaveUpload_Channel : REAL; // 上传目标通道 0=水路 1=油路
 	PP_WaveUpload_NumPoints : REAL; // 波形数据点数 (2~500)
 	PP_WaveUpload_Commit : REAL; // 提交标志: 上升沿触发加载

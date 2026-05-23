@@ -51,6 +51,9 @@ VAR
 	bOilSegTrigger : BOOL;   // 油路事件型 ILC 切分触发
 	nWaterSegPts : INT;      // 水路最近一次提交的点数（供切分用）
 	nOilSegPts : INT;        // 油路最近一次提交的点数
+	iWaveTypeNow : INT;      // 当前波形类型（每周期顶层从 PP_Trace_Flag 解析一次）
+	iLastWaveTypeW : INT;    // 水路上一周期波形类型（用于直线波 PID 复位边沿检测）
+	iLastWaveTypeO : INT;    // 油路上一周期波形类型
 	Water_Pressure_Filter : PWControl.LowPassFilter_R;
 	PP_Water_ActualPressure : REAL;
 	Oil_Pressure_Filter : PWControl.LowPassFilter_R;
@@ -252,6 +255,7 @@ END_IF
 bWaterActive := (GVL_PulsePressure.PP_TestMode = 0.0 OR GVL_PulsePressure.PP_TestMode = 2.0);
 bOilActive   := (GVL_PulsePressure.PP_TestMode = 1.0 OR GVL_PulsePressure.PP_TestMode = 3.0);
 bBurstMode   := (GVL_PulsePressure.PP_TestMode = 2.0 OR GVL_PulsePressure.PP_TestMode = 3.0);
+iWaveTypeNow := REAL_TO_INT(GVL_PulsePressure.PP_Trace_Flag);
 
 //1.水侧测试：开启10.02、10.04，关闭10.01、10.03
 IF bWaterActive=TRUE THEN
@@ -908,24 +912,52 @@ END_IF
 
 // ---- 2. ILC 计算（仅诊断，不参与控制量汇总）----
 // ILC 内部维护学习存储；其虚拟目标供诊断观察，但 rError 仍按原始目标算。
-fbILC_W(
-    bEnable         := (GVL_PulsePressure.PP_Water_ILC_Enable = 1.0),
-    rTargetRaw      := fbWaveGen_W.rTarget,
-    rActual         := GVL_PulsePressure.PP_Water_ActualPressure,
-    iPointIndex     := fbWaveGen_W.iPointIndex,
-    iPointsPerCycle := fbWaveGen_W.iPointsPerCycle,
-    bNewCycle       := fbWaveGen_W.bNewCycle,
-    bReset          := FALSE,
-    iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Water_ILC_MaxIter),
-    rLearningRate   := GVL_PulsePressure.PP_Water_ILC_LearningRate,
-    rAlphaLR        := 0.4,
-    bAlphaEnable    := TRUE,
-    iWaveType       := REAL_TO_INT(GVL_PulsePressure.PP_Trace_Flag),
-    nWarmupCycles   := 5,
-    bSegmentTrigger := bWaterSegTrigger,
-    pSegmentData    := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
-    nSegmentPoints  := nWaterSegPts
-);
+// 直线波 (iWaveTypeNow=6)：ILC 输入端目标改为 PMax 恒定，rLinearRate 取专用速率字段
+//   - bEnable 强制 TRUE（直线波必须由 ILC 做斜率限制，不允许 ILC_Enable=0 旁路）
+//   - rTargetRaw = PMax；rVirtualTarget 在 FB_ILC 内部以斜率限制方式逼近
+IF iWaveTypeNow = 6 THEN
+    fbILC_W(
+        bEnable         := TRUE,
+        rTargetRaw      := GVL_PulsePressure.PP_Water_TargetPressure,
+        rActual         := GVL_PulsePressure.PP_Water_ActualPressure,
+        iPointIndex     := 0,
+        iPointsPerCycle := 0,
+        bNewCycle       := FALSE,
+        bReset          := FALSE,
+        iMaxIterations  := 0,
+        rLearningRate   := 0.0,
+        rAlphaLR        := 0.0,
+        bAlphaEnable    := FALSE,
+        iWaveType       := 6,
+        nWarmupCycles   := 0,
+        bSegmentTrigger := FALSE,
+        pSegmentData    := 0,
+        nSegmentPoints  := 0,
+        rLinearRate     := GVL_PulsePressure.PP_Water_LinearRate,
+        rDt             := rDt
+    );
+ELSE
+    fbILC_W(
+        bEnable         := (GVL_PulsePressure.PP_Water_ILC_Enable = 1.0),
+        rTargetRaw      := fbWaveGen_W.rTarget,
+        rActual         := GVL_PulsePressure.PP_Water_ActualPressure,
+        iPointIndex     := fbWaveGen_W.iPointIndex,
+        iPointsPerCycle := fbWaveGen_W.iPointsPerCycle,
+        bNewCycle       := fbWaveGen_W.bNewCycle,
+        bReset          := FALSE,
+        iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Water_ILC_MaxIter),
+        rLearningRate   := GVL_PulsePressure.PP_Water_ILC_LearningRate,
+        rAlphaLR        := 0.4,
+        bAlphaEnable    := TRUE,
+        iWaveType       := iWaveTypeNow,
+        nWarmupCycles   := 5,
+        bSegmentTrigger := bWaterSegTrigger,
+        pSegmentData    := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
+        nSegmentPoints  := nWaterSegPts,
+        rLinearRate     := 0.0,
+        rDt             := rDt
+    );
+END_IF
 bWaterSegTrigger := FALSE;  // 一次性消费
 rUIlc_W := fbILC_W.rOutput;
 GVL_PulsePressure.PP_Water_ILC_Output := rUIlc_W;
@@ -937,9 +969,8 @@ ELSE
     GVL_PulsePressure.PP_Water_ILC_Learning := 0.0;
 END_IF
 
-// 修正后的目标：ILC 使能时用其预畸变目标，否则透传原始波形目标
-// （FB_ILC 在 bEnable=FALSE 时 rVirtualTarget=0，必须回退）
-IF GVL_PulsePressure.PP_Water_ILC_Enable = 1.0 THEN
+// 修正后的目标：直线波强制使用 ILC 输出；其它波形按 ILC_Enable 选择
+IF iWaveTypeNow = 6 OR GVL_PulsePressure.PP_Water_ILC_Enable = 1.0 THEN
     rTargetCorrected_W := fbILC_W.rVirtualTarget;
 ELSE
     rTargetCorrected_W := fbWaveGen_W.rTarget;
@@ -950,14 +981,28 @@ rError_W := rTargetCorrected_W - GVL_PulsePressure.PP_Water_ActualPressure;
 GVL_PulsePressure.PP_Water_PressureError := rError_W;
 
 // ---- 4. PID 反馈 ----
-fbPID_W(
-    bEnable := TRUE,
-    rError  := rError_W,
-    rDt     := rDt,
-    bReset  := FALSE,
-    rPID_Kp := GVL_PulsePressure.PP_Water_PID_Kp,
-    rPID_Ki := GVL_PulsePressure.PP_Water_PID_Ki
-);
+// 直线波 (iWaveTypeNow=6)：使用爆破 PID 增益(Burst_Kp/Ki)，进入直线模式时复位积分
+// 其它波形：使用脉冲 PID 增益(PID_Kp/Ki)；从直线退回时也复位一次，清理可能残留的积分
+IF iWaveTypeNow = 6 THEN
+    fbPID_W(
+        bEnable := TRUE,
+        rError  := rError_W,
+        rDt     := rDt,
+        bReset  := (iLastWaveTypeW <> 6),
+        rPID_Kp := GVL_PulsePressure.PP_Water_Burst_Kp,
+        rPID_Ki := GVL_PulsePressure.PP_Water_Burst_Ki
+    );
+ELSE
+    fbPID_W(
+        bEnable := TRUE,
+        rError  := rError_W,
+        rDt     := rDt,
+        bReset  := (iLastWaveTypeW = 6),
+        rPID_Kp := GVL_PulsePressure.PP_Water_PID_Kp,
+        rPID_Ki := GVL_PulsePressure.PP_Water_PID_Ki
+    );
+END_IF
+iLastWaveTypeW := iWaveTypeNow;
 rUPid_W := fbPID_W.rOutput;
 GVL_PulsePressure.PP_Water_PID_Output := rUPid_W;
 
@@ -999,24 +1044,50 @@ IF GVL_PulsePressure.PP_Oil_ActualPressure > rPeakPressure_O THEN
 END_IF
 
 // ---- 2. ILC 计算（仅诊断，不参与控制量汇总）----
-fbILC_O(
-    bEnable         := (GVL_PulsePressure.PP_Oil_ILC_Enable = 1.0),
-    rTargetRaw      := fbWaveGen_O.rTarget,
-    rActual         := GVL_PulsePressure.PP_Oil_ActualPressure,
-    iPointIndex     := fbWaveGen_O.iPointIndex,
-    iPointsPerCycle := fbWaveGen_O.iPointsPerCycle,
-    bNewCycle       := fbWaveGen_O.bNewCycle,
-    bReset          := FALSE,
-    iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Oil_ILC_MaxIter),
-    rLearningRate   := GVL_PulsePressure.PP_Oil_ILC_LearningRate,
-    rAlphaLR        := 0.4,
-    bAlphaEnable    := TRUE,
-    iWaveType       := REAL_TO_INT(GVL_PulsePressure.PP_Trace_Flag),
-    nWarmupCycles   := 5,
-    bSegmentTrigger := bOilSegTrigger,
-    pSegmentData    := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
-    nSegmentPoints  := nOilSegPts
-);
+// 直线波 (iWaveTypeNow=6)：rTargetRaw 改为 PMax 恒定，rLinearRate 取专用速率字段
+IF iWaveTypeNow = 6 THEN
+    fbILC_O(
+        bEnable         := TRUE,
+        rTargetRaw      := GVL_PulsePressure.PP_Oil_TargetPressure,
+        rActual         := GVL_PulsePressure.PP_Oil_ActualPressure,
+        iPointIndex     := 0,
+        iPointsPerCycle := 0,
+        bNewCycle       := FALSE,
+        bReset          := FALSE,
+        iMaxIterations  := 0,
+        rLearningRate   := 0.0,
+        rAlphaLR        := 0.0,
+        bAlphaEnable    := FALSE,
+        iWaveType       := 6,
+        nWarmupCycles   := 0,
+        bSegmentTrigger := FALSE,
+        pSegmentData    := 0,
+        nSegmentPoints  := 0,
+        rLinearRate     := GVL_PulsePressure.PP_Oil_LinearRate,
+        rDt             := rDt
+    );
+ELSE
+    fbILC_O(
+        bEnable         := (GVL_PulsePressure.PP_Oil_ILC_Enable = 1.0),
+        rTargetRaw      := fbWaveGen_O.rTarget,
+        rActual         := GVL_PulsePressure.PP_Oil_ActualPressure,
+        iPointIndex     := fbWaveGen_O.iPointIndex,
+        iPointsPerCycle := fbWaveGen_O.iPointsPerCycle,
+        bNewCycle       := fbWaveGen_O.bNewCycle,
+        bReset          := FALSE,
+        iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Oil_ILC_MaxIter),
+        rLearningRate   := GVL_PulsePressure.PP_Oil_ILC_LearningRate,
+        rAlphaLR        := 0.4,
+        bAlphaEnable    := TRUE,
+        iWaveType       := iWaveTypeNow,
+        nWarmupCycles   := 5,
+        bSegmentTrigger := bOilSegTrigger,
+        pSegmentData    := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
+        nSegmentPoints  := nOilSegPts,
+        rLinearRate     := 0.0,
+        rDt             := rDt
+    );
+END_IF
 bOilSegTrigger := FALSE;
 rUIlc_O := fbILC_O.rOutput;
 GVL_PulsePressure.PP_Oil_ILC_Output := rUIlc_O;
@@ -1028,8 +1099,8 @@ ELSE
     GVL_PulsePressure.PP_Oil_ILC_Learning := 0.0;
 END_IF
 
-// 修正后的目标：ILC 使能时用其预畸变目标，否则透传原始波形目标
-IF GVL_PulsePressure.PP_Oil_ILC_Enable = 1.0 THEN
+// 修正后的目标：直线波强制使用 ILC 输出；其它波形按 ILC_Enable 选择
+IF iWaveTypeNow = 6 OR GVL_PulsePressure.PP_Oil_ILC_Enable = 1.0 THEN
     rTargetCorrected_O := fbILC_O.rVirtualTarget;
 ELSE
     rTargetCorrected_O := fbWaveGen_O.rTarget;
@@ -1040,14 +1111,27 @@ rError_O := rTargetCorrected_O - GVL_PulsePressure.PP_Oil_ActualPressure;
 GVL_PulsePressure.PP_Oil_PressureError := rError_O;
 
 // ---- 4. PID 反馈 ----
-fbPID_O(
-    bEnable := TRUE,
-    rError  := rError_O,
-    rDt     := rDt,
-    bReset  := FALSE,
-    rPID_Kp := GVL_PulsePressure.PP_Oil_PID_Kp,
-    rPID_Ki := GVL_PulsePressure.PP_Oil_PID_Ki
-);
+// 直线波 (iWaveTypeNow=6)：使用爆破 PID 增益(Burst_Kp/Ki)，进入直线模式时复位积分
+IF iWaveTypeNow = 6 THEN
+    fbPID_O(
+        bEnable := TRUE,
+        rError  := rError_O,
+        rDt     := rDt,
+        bReset  := (iLastWaveTypeO <> 6),
+        rPID_Kp := GVL_PulsePressure.PP_Oil_Burst_Kp,
+        rPID_Ki := GVL_PulsePressure.PP_Oil_Burst_Ki
+    );
+ELSE
+    fbPID_O(
+        bEnable := TRUE,
+        rError  := rError_O,
+        rDt     := rDt,
+        bReset  := (iLastWaveTypeO = 6),
+        rPID_Kp := GVL_PulsePressure.PP_Oil_PID_Kp,
+        rPID_Ki := GVL_PulsePressure.PP_Oil_PID_Ki
+    );
+END_IF
+iLastWaveTypeO := iWaveTypeNow;
 rUPid_O := fbPID_O.rOutput;
 GVL_PulsePressure.PP_Oil_PID_Output := rUPid_O;
 

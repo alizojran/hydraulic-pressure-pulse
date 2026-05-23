@@ -391,11 +391,19 @@ i := i+2;
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
 PRG_DeviceControl.fromPC_HR_Pump2_Frequency_InPut := TwoWord_to_Float.Output;      // 150-151(换热泵2_频率(转速)设定)
 
-// 152-167 保留
+i := 152;
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Water_LinearRate := TwoWord_to_Float.Output;       // 152-153: 水路直线波升压速率(MPa/s)
+
+i := 154;
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_LinearRate := TwoWord_to_Float.Output;         // 154-155: 油路直线波升压速率(MPa/s)
+
+// 156-167 保留
 
 i := 168;
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Trace_Flag := TwoWord_to_Float.Output;             // 168-169: PC下发波形编号(1=正弦 2=三角 3=梯形 4=矩形 5=任意)
+GVL_PulsePressure.PP_Trace_Flag := TwoWord_to_Float.Output;             // 168-169: PC下发波形编号(1=正弦 2=三角 3=梯形 4=矩形 5=任意 6=直线)
 
 
 i := 170;

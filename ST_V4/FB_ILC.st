@@ -13,12 +13,15 @@ VAR_INPUT
 	rGroupW : REAL := 0.5; // 12 段组级修正权重（解决 bin 钳位时溢出不转移问题）；0=禁用
 	bAlphaEnable : BOOL := TRUE; // α 自学习使能（正弦/三角/梯形/矩形）
 	bPlatCorrEnable : BOOL := TRUE; // 平台 2 段幅值修正使能（仅梯形/矩形生效）
-	iWaveType : INT;            // 波形类型（与 PP_Trace_Flag 对齐）：1=正弦 2=三角 3=梯形 4=矩形 5=任意
+	iWaveType : INT;            // 波形类型（与 PP_Trace_Flag 对齐）：1=正弦 2=三角 3=梯形 4=矩形 5=任意 6=直线
 	nWarmupCycles : INT := 3; // 暖机周期数：前N个周期透传不修正，等待 vMin/vMax 极值收敛
 	// 事件型 ILC 切分入参（仅 nWaveType=5 自定义波使用；其它波形可恒为 FALSE / 0 / NULL）
 	bSegmentTrigger : BOOL;     // 上升沿触发一次切分（PRG 在 PP_WaveUpload_Commit 上升沿置 TRUE 一拍）
 	pSegmentData : POINTER TO REAL; // 待切分波形点表指针（通常指向 PP_WaveUpload_Data）
 	nSegmentPoints : INT;       // 待切分点数
+	// 直线波入参（仅 nWaveType=6 使用，其它波形可恒为 0）
+	rLinearRate : REAL;         // 直线波升压速率 (MPa/s)
+	rDt : REAL := 0.001;        // 控制周期 (s)，与 PRG 主循环 rDt 对齐
 END_VAR
 VAR_OUTPUT
 	rOutput : REAL; // 修正量 = rVirtualTarget - rTargetRaw (MPa)
@@ -162,6 +165,8 @@ VAR
 	iEvtK, iEvtCls, iEvtBinIdx, iEvtLen, iEvtLocal, iEvtPoolCnt : INT;
 	rEvtFrac, rEvtCorr, rEvtPoolErr, rEvtPoolMean, rEvtBinCorrLim : REAL;
 	iEvtBb : INT;
+	// 直线波 (nWaveType=6) 临时变量
+	rLinearDelta : REAL;        // 每周期最大步长 = rLinearRate · rDt
 	// 事件型切分内部状态（一次性，由 bSegmentTrigger 上升沿触发）
 	bSegmentTriggerPrev : BOOL;
 	bSegContinue : BOOL;        // 切分分阶段串联门控
@@ -266,9 +271,9 @@ END_IF
 // 波形类型映射：上位机经 PP_Trace_Flag(168-169) 直接指定
 // 入参 iWaveType 与协议对齐，与内部 nWaveType 数值相同：
 //   1=正弦(8 段 α), 2=三角(8 段 α), 3=梯形(12 段 α + 2 段平台),
-//   4=矩形(同 3), 5=任意波(逐点 ILC)
+//   4=矩形(同 3), 5=任意波(逐点 ILC), 6=直线波(斜率限制透传)
 // ============================================================
-IF iWaveType >= 1 AND iWaveType <= 5 THEN
+IF iWaveType >= 1 AND iWaveType <= 6 THEN
     nWaveType := iWaveType;
 ELSE
     nWaveType := 1; // 未知类型按正弦处理（兜底）
@@ -1073,6 +1078,24 @@ END_IF
 // ============================================================
 // 输出生成
 // ============================================================
+
+// 直线波 (nWaveType=6)：斜率限制透传，无学习无暖机
+// rVirtualTarget 以 rLinearRate · rDt 每步逼近 rTargetRaw（PMax），到位即保持。
+// 起步从复位后的 rVirtualTarget=0；切换波形时从当前值继续。
+IF nWaveType = 6 THEN
+    rLinearDelta := rLinearRate * rDt;
+    IF rLinearDelta < 0.0 THEN rLinearDelta := 0.0; END_IF
+    IF rTargetRaw > rVirtualTarget + rLinearDelta THEN
+        rVirtualTarget := rVirtualTarget + rLinearDelta;
+    ELSIF rTargetRaw < rVirtualTarget - rLinearDelta THEN
+        rVirtualTarget := rVirtualTarget - rLinearDelta;
+    ELSE
+        rVirtualTarget := rTargetRaw;
+    END_IF
+    rOutput        := rVirtualTarget - rTargetRaw;
+    bNewCyclePrev  := bNewCycle;
+    RETURN;
+END_IF
 
 // 暖机期 / 首次学习窗未到 / 目标无幅值：直通
 IF iIterCount <= nWarmupCycles OR rPrevTargetRange < 0.001 THEN
