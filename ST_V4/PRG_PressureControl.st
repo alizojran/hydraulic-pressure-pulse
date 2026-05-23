@@ -47,6 +47,10 @@ VAR
 	rFlushToggleTimer : REAL; // 冲洗排气往复切换计时器(s)
 	nPts : INT; // 波形上传点数
 	iCh : INT; // 波形上传通道
+	bWaterSegTrigger : BOOL; // 水路事件型 ILC 切分触发（commit 上升沿置 TRUE 一拍）
+	bOilSegTrigger : BOOL;   // 油路事件型 ILC 切分触发
+	nWaterSegPts : INT;      // 水路最近一次提交的点数（供切分用）
+	nOilSegPts : INT;        // 油路最近一次提交的点数
 	Water_Pressure_Filter : PWControl.LowPassFilter_R;
 	PP_Water_ActualPressure : REAL;
 	Oil_Pressure_Filter : PWControl.LowPassFilter_R;
@@ -139,21 +143,17 @@ IF GVL_PulsePressure.PP_WaveUpload_Commit = 1.0 AND NOT bCommitPrev THEN
                 pData   := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
                 nPoints := nPts
             );
-            // 事件型 ILC 切分（nWaveType=5 时自动接管；失败则退回逐点 ILC）
-            fbILC_W.RunSegmentation(
-                pData   := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
-                nPoints := nPts
-            );
+            // 事件型 ILC 切分：给 fbILC_W 置触发位，下一拍 fbILC_W() 调用时消化
+            bWaterSegTrigger := TRUE;
+            nWaterSegPts     := nPts;
         ELSE
             // 油路
             fbWaveGen_O.LoadCustomWaveform(
                 pData   := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
                 nPoints := nPts
             );
-            fbILC_O.RunSegmentation(
-                pData   := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
-                nPoints := nPts
-            );
+            bOilSegTrigger := TRUE;
+            nOilSegPts     := nPts;
         END_IF
         GVL_PulsePressure.PP_WaveUpload_Status := 1.0;  // 已加载
     ELSE
@@ -921,8 +921,12 @@ fbILC_W(
     rAlphaLR        := 0.4,
     bAlphaEnable    := TRUE,
     iWaveType       := REAL_TO_INT(GVL_PulsePressure.PP_Trace_Flag),
-    nWarmupCycles   := 5
+    nWarmupCycles   := 5,
+    bSegmentTrigger := bWaterSegTrigger,
+    pSegmentData    := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
+    nSegmentPoints  := nWaterSegPts
 );
+bWaterSegTrigger := FALSE;  // 一次性消费
 rUIlc_W := fbILC_W.rOutput;
 GVL_PulsePressure.PP_Water_ILC_Output := rUIlc_W;
 GVL_PulsePressure.PP_Water_ILC_Iteration := DINT_TO_REAL(fbILC_W.iIteration);
@@ -1008,8 +1012,12 @@ fbILC_O(
     rAlphaLR        := 0.4,
     bAlphaEnable    := TRUE,
     iWaveType       := REAL_TO_INT(GVL_PulsePressure.PP_Trace_Flag),
-    nWarmupCycles   := 5
+    nWarmupCycles   := 5,
+    bSegmentTrigger := bOilSegTrigger,
+    pSegmentData    := ADR(GVL_PulsePressure.PP_WaveUpload_Data),
+    nSegmentPoints  := nOilSegPts
 );
+bOilSegTrigger := FALSE;
 rUIlc_O := fbILC_O.rOutput;
 GVL_PulsePressure.PP_Oil_ILC_Output := rUIlc_O;
 GVL_PulsePressure.PP_Oil_ILC_Iteration := DINT_TO_REAL(fbILC_O.iIteration);

@@ -15,6 +15,10 @@ VAR_INPUT
 	bPlatCorrEnable : BOOL := TRUE; // 平台 2 段幅值修正使能（仅梯形/矩形生效）
 	iWaveType : INT;            // 波形类型（与 PP_Trace_Flag 对齐）：1=正弦 2=三角 3=梯形 4=矩形 5=任意
 	nWarmupCycles : INT := 3; // 暖机周期数：前N个周期透传不修正，等待 vMin/vMax 极值收敛
+	// 事件型 ILC 切分入参（仅 nWaveType=5 自定义波使用；其它波形可恒为 FALSE / 0 / NULL）
+	bSegmentTrigger : BOOL;     // 上升沿触发一次切分（PRG 在 PP_WaveUpload_Commit 上升沿置 TRUE 一拍）
+	pSegmentData : POINTER TO REAL; // 待切分波形点表指针（通常指向 PP_WaveUpload_Data）
+	nSegmentPoints : INT;       // 待切分点数
 END_VAR
 VAR_OUTPUT
 	rOutput : REAL; // 修正量 = rVirtualTarget - rTargetRaw (MPa)
@@ -158,6 +162,22 @@ VAR
 	iEvtK, iEvtCls, iEvtBinIdx, iEvtLen, iEvtLocal, iEvtPoolCnt : INT;
 	rEvtFrac, rEvtCorr, rEvtPoolErr, rEvtPoolMean, rEvtBinCorrLim : REAL;
 	iEvtBb : INT;
+	// 事件型切分内部状态（一次性，由 bSegmentTrigger 上升沿触发）
+	bSegmentTriggerPrev : BOOL;
+	bSegContinue : BOOL;        // 切分分阶段串联门控
+	iSegI, iSegJ, iSegK : INT;
+	rSegTgt : REAL;
+	rSegMinAll, rSegMaxAll, rSegRange : REAL;
+	rSegThrUp, rSegThrDn, rSegFlatThr : REAL;
+	bSegInEvent : BOOL;
+	rSegWinMax, rSegWinMin : REAL;
+	iSegScan, iSegPlatS, iSegPlatE : INT;
+	rSegPlatLvl : REAL;
+	nSegPlatInEvt : INT;
+	bSegMultiPlat : BOOL;
+	iSegCls : INT;
+	rSegClassGap : REAL;
+	bSegExtended : BOOL;
 	// --- 授权检查内部状态 ---
 	bAuthChecked : BOOL;     // 已检查标志（每次重启检查一次）
 	bAuthorized : BOOL;      // 鉴权通过
@@ -253,6 +273,219 @@ IF iWaveType >= 1 AND iWaveType <= 5 THEN
 ELSE
     nWaveType := 1; // 未知类型按正弦处理（兜底）
 END_IF
+
+// ============================================================
+// 事件型 ILC 切分（仅 bSegmentTrigger 上升沿触发一次）
+// 流程分 6 阶段，用 bSegContinue 串联门控；任一阶段失败 → 静默退回逐点 ILC
+//   1) 入参合法性
+//   2) 全程扫描求 min/max
+//   3) 双阈值带迟滞切分事件
+//   4) 每事件扫平台 → 形状指纹（1=A 钟形, 2=B 单梯形）；多平台直接判失败
+//   5) (shape, peak 桶) 分类，类数超限判失败
+//   6) 建反查表 + 清旧逐点 ILC 表 / 累加器 + 置 bEventModeActive
+// ============================================================
+IF bSegmentTrigger AND NOT bSegmentTriggerPrev THEN
+    bSegmentationOK  := FALSE;
+    bEventModeActive := FALSE;
+    nEventCount := 0;
+    nClassCount := 0;
+    bSegContinue := TRUE;
+    bSegMultiPlat := FALSE;
+
+    // 阶段 1：入参合法性
+    IF NOT (nSegmentPoints >= 2 AND nSegmentPoints <= POINTS_MAX AND pSegmentData <> 0) THEN
+        bSegContinue := FALSE;
+    END_IF
+
+    // 阶段 2：全程扫描
+    IF bSegContinue THEN
+        rSegMinAll := pSegmentData[0];
+        rSegMaxAll := pSegmentData[0];
+        FOR iSegI := 1 TO nSegmentPoints - 1 DO
+            rSegTgt := pSegmentData[iSegI];
+            IF rSegTgt < rSegMinAll THEN rSegMinAll := rSegTgt; END_IF
+            IF rSegTgt > rSegMaxAll THEN rSegMaxAll := rSegTgt; END_IF
+        END_FOR
+        rSegRange := rSegMaxAll - rSegMinAll;
+        IF rSegRange < 0.05 THEN
+            bSegContinue := FALSE; // 几乎是直流，没有事件结构
+        END_IF
+    END_IF
+
+    // 阶段 3：双阈值切分事件
+    IF bSegContinue THEN
+        rSegThrUp   := rSegMinAll + EVT_THR_UP_K * rSegRange;
+        rSegThrDn   := rSegMinAll + EVT_THR_DN_K * rSegRange;
+        rSegFlatThr := EVT_PLAT_FLAT_K * rSegRange;
+        bSegInEvent := FALSE;
+        nEventCount := 0;
+        FOR iSegI := 0 TO nSegmentPoints - 1 DO
+            rSegTgt := pSegmentData[iSegI];
+            IF NOT bSegInEvent THEN
+                IF rSegTgt >= rSegThrUp AND nEventCount < EVT_MAX_EVENTS THEN
+                    bSegInEvent := TRUE;
+                    iEventStart[nEventCount] := iSegI;
+                    rEventPeak[nEventCount]  := rSegTgt;
+                END_IF
+            ELSE
+                IF rSegTgt > rEventPeak[nEventCount] THEN
+                    rEventPeak[nEventCount] := rSegTgt;
+                END_IF
+                IF rSegTgt <= rSegThrDn THEN
+                    iEventEnd[nEventCount] := iSegI - 1;
+                    IF (iEventEnd[nEventCount] - iEventStart[nEventCount] + 1) >= EVT_MIN_EVENT_LEN THEN
+                        nEventCount := nEventCount + 1;
+                    END_IF
+                    bSegInEvent := FALSE;
+                    IF nEventCount >= EVT_MAX_EVENTS THEN
+                        EXIT;
+                    END_IF
+                END_IF
+            END_IF
+        END_FOR
+        // 末尾仍在事件内
+        IF bSegInEvent AND nEventCount < EVT_MAX_EVENTS THEN
+            iEventEnd[nEventCount] := nSegmentPoints - 1;
+            IF (iEventEnd[nEventCount] - iEventStart[nEventCount] + 1) >= EVT_MIN_EVENT_LEN THEN
+                nEventCount := nEventCount + 1;
+            END_IF
+        END_IF
+        IF nEventCount < EVT_MIN_EVENTS THEN
+            nEventCount := 0;
+            bSegContinue := FALSE;
+        END_IF
+    END_IF
+
+    // 阶段 4：形状判定（扫平台）
+    IF bSegContinue THEN
+        FOR iSegK := 0 TO nEventCount - 1 DO
+            nSegPlatInEvt := 0;
+            iSegPlatS     := -1;
+            iSegPlatE     := -1;
+            rSegPlatLvl   := 0.0;
+            iSegScan      := iEventStart[iSegK];
+
+            WHILE iSegScan + EVT_MIN_PLAT_LEN - 1 <= iEventEnd[iSegK] DO
+                rSegWinMin := pSegmentData[iSegScan];
+                rSegWinMax := pSegmentData[iSegScan];
+                FOR iSegJ := 1 TO EVT_MIN_PLAT_LEN - 1 DO
+                    rSegTgt := pSegmentData[iSegScan + iSegJ];
+                    IF rSegTgt < rSegWinMin THEN rSegWinMin := rSegTgt; END_IF
+                    IF rSegTgt > rSegWinMax THEN rSegWinMax := rSegTgt; END_IF
+                END_FOR
+
+                IF (rSegWinMax - rSegWinMin) <= rSegFlatThr AND rSegWinMax >= rSegThrUp THEN
+                    IF nSegPlatInEvt = 0 THEN
+                        iSegPlatS     := iSegScan;
+                        iSegPlatE     := iSegScan + EVT_MIN_PLAT_LEN - 1;
+                        rSegPlatLvl   := (rSegWinMax + rSegWinMin) / 2.0;
+                        nSegPlatInEvt := 1;
+                        // 向右扩展同一平台
+                        bSegExtended := TRUE;
+                        iSegJ := iSegPlatE + 1;
+                        WHILE bSegExtended AND iSegJ <= iEventEnd[iSegK] DO
+                            rSegTgt := pSegmentData[iSegJ];
+                            IF ABS(rSegTgt - rSegPlatLvl) <= rSegFlatThr THEN
+                                iSegPlatE := iSegJ;
+                                iSegJ := iSegJ + 1;
+                            ELSE
+                                bSegExtended := FALSE;
+                            END_IF
+                        END_WHILE
+                        iSegScan := iSegPlatE + 1;
+                    ELSE
+                        bSegMultiPlat := TRUE;
+                        EXIT;
+                    END_IF
+                ELSE
+                    iSegScan := iSegScan + 1;
+                END_IF
+            END_WHILE
+
+            IF bSegMultiPlat THEN
+                EXIT;
+            END_IF
+
+            IF nSegPlatInEvt = 1 THEN
+                iEventShape[iSegK]     := 2;        // B: 单梯形
+                iEventPlatStart[iSegK] := iSegPlatS;
+                iEventPlatEnd[iSegK]   := iSegPlatE;
+                rEventPeak[iSegK]      := rSegPlatLvl; // B 型用平台幅值替代峰值
+            ELSE
+                iEventShape[iSegK]     := 1;        // A: 钟形
+                iEventPlatStart[iSegK] := -1;
+                iEventPlatEnd[iSegK]   := -1;
+            END_IF
+        END_FOR
+
+        IF bSegMultiPlat THEN
+            // V1 不支持多平台事件
+            nEventCount := 0;
+            bSegContinue := FALSE;
+        END_IF
+    END_IF
+
+    // 阶段 5：分类 (shape, peak 桶)
+    IF bSegContinue THEN
+        rSegClassGap := EVT_CLASS_GAP_K * rSegRange;
+        nClassCount := 0;
+        FOR iSegK := 0 TO nEventCount - 1 DO
+            iSegCls := -1;
+            FOR iSegJ := 0 TO nClassCount - 1 DO
+                IF iClassShape[iSegJ] = iEventShape[iSegK]
+                AND ABS(rClassPeakRef[iSegJ] - rEventPeak[iSegK]) <= rSegClassGap THEN
+                    iSegCls := iSegJ;
+                    EXIT;
+                END_IF
+            END_FOR
+            IF iSegCls < 0 THEN
+                IF nClassCount >= EVT_MAX_CLASSES THEN
+                    bSegContinue := FALSE;
+                    EXIT;
+                END_IF
+                iSegCls := nClassCount;
+                iClassShape[iSegCls]   := iEventShape[iSegK];
+                rClassPeakRef[iSegCls] := rEventPeak[iSegK];
+                FOR iSegJ := 1 TO 8 DO
+                    rEvtBinCorr[iSegCls, iSegJ] := 0.0;
+                END_FOR
+                nClassCount := nClassCount + 1;
+            END_IF
+            iEventClass[iSegK] := iSegCls;
+        END_FOR
+        IF NOT bSegContinue THEN
+            nEventCount := 0;
+            nClassCount := 0;
+        END_IF
+    END_IF
+
+    // 阶段 6：建反查表 + 清旧表 + 提交
+    IF bSegContinue THEN
+        FOR iSegI := 0 TO nSegmentPoints - 1 DO
+            iPointToEvent[iSegI] := -1;
+        END_FOR
+        FOR iSegK := 0 TO nEventCount - 1 DO
+            FOR iSegI := iEventStart[iSegK] TO iEventEnd[iSegK] DO
+                iPointToEvent[iSegI] := iSegK;
+            END_FOR
+        END_FOR
+        // 清旧逐点 ILC 表（事件模式接管）
+        FOR iSegI := 0 TO POINTS_MAX - 1 DO
+            rCorrTable5[iSegI] := 0.0;
+        END_FOR
+        iPtsPerCycle5Last := 0;
+        // 清事件累加器
+        FOR iSegK := 0 TO EVT_MAX_EVENTS - 1 DO
+            FOR iSegJ := 1 TO 8 DO
+                rEvtBinErrSum[iSegK, iSegJ] := 0.0;
+                iEvtBinErrCnt[iSegK, iSegJ] := 0;
+            END_FOR
+        END_FOR
+        bSegmentationOK  := TRUE;
+        bEventModeActive := TRUE;
+    END_IF
+END_IF
+bSegmentTriggerPrev := bSegmentTrigger;
 
 // ============================================================
 // 复位 / 禁用
@@ -1037,228 +1270,4 @@ rOutput := rVirtualTarget - rTargetRaw;
 
 bNewCyclePrev := bNewCycle;
 
-METHOD PUBLIC RunSegmentation : BOOL
-// 事件型 ILC 切分入口：上位机提交波形后由 PRG_PressureControl 调用一次。
-// 成功条件：能切出 ≥ EVT_MIN_EVENTS 个事件、无多平台事件、类数不超出上限。
-// 失败时 bEventModeActive 保持 FALSE，nWaveType=5 自动退回逐点 ILC。
-VAR_INPUT
-    pData : POINTER TO REAL;   // 波形点表指针（PP_WaveUpload_Data）
-    nPoints : INT;             // 点数（2~POINTS_MAX）
-END_VAR
-VAR
-    i, j, k          : INT;
-    rTgt             : REAL;
-    rMinAll, rMaxAll : REAL;
-    rRange           : REAL;
-    rThrUp, rThrDn   : REAL;
-    rFlatThr         : REAL;
-    bInEvent         : BOOL;
-    rWinMax, rWinMin : REAL;
-    iScan            : INT;
-    iPlatS, iPlatE   : INT;
-    rPlatLvl         : REAL;
-    nPlatInEvt       : INT;
-    bMultiPlat       : BOOL;
-    iCls             : INT;
-    rClassGap        : REAL;
-    bExtended        : BOOL;
-END_VAR
-
-// 复位结果
-bEventModeActive := FALSE;
-bSegmentationOK  := FALSE;
-nEventCount      := 0;
-nClassCount      := 0;
-
-IF nPoints < 2 OR nPoints > POINTS_MAX OR pData = 0 THEN
-    RunSegmentation := FALSE;
-    RETURN;
-END_IF
-
-// 1) 扫一遍取全程
-rMinAll := pData[0];
-rMaxAll := pData[0];
-FOR i := 1 TO nPoints - 1 DO
-    rTgt := pData[i];
-    IF rTgt < rMinAll THEN rMinAll := rTgt; END_IF
-    IF rTgt > rMaxAll THEN rMaxAll := rTgt; END_IF
-END_FOR
-rRange := rMaxAll - rMinAll;
-IF rRange < 0.05 THEN
-    // 几乎是直流，没有事件结构可识别
-    RunSegmentation := FALSE;
-    RETURN;
-END_IF
-
-// 2) 双阈值切分事件
-rThrUp   := rMinAll + EVT_THR_UP_K * rRange;
-rThrDn   := rMinAll + EVT_THR_DN_K * rRange;
-rFlatThr := EVT_PLAT_FLAT_K * rRange;
-
-bInEvent := FALSE;
-nEventCount := 0;
-FOR i := 0 TO nPoints - 1 DO
-    rTgt := pData[i];
-    IF NOT bInEvent THEN
-        IF rTgt >= rThrUp AND nEventCount < EVT_MAX_EVENTS THEN
-            bInEvent := TRUE;
-            iEventStart[nEventCount] := i;
-            rEventPeak[nEventCount]  := rTgt;
-        END_IF
-    ELSE
-        IF rTgt > rEventPeak[nEventCount] THEN
-            rEventPeak[nEventCount] := rTgt;
-        END_IF
-        IF rTgt <= rThrDn THEN
-            iEventEnd[nEventCount] := i - 1;
-            IF (iEventEnd[nEventCount] - iEventStart[nEventCount] + 1) >= EVT_MIN_EVENT_LEN THEN
-                nEventCount := nEventCount + 1;
-            END_IF
-            bInEvent := FALSE;
-            IF nEventCount >= EVT_MAX_EVENTS THEN
-                EXIT;
-            END_IF
-        END_IF
-    END_IF
-END_FOR
-// 末尾仍在事件内
-IF bInEvent AND nEventCount < EVT_MAX_EVENTS THEN
-    iEventEnd[nEventCount] := nPoints - 1;
-    IF (iEventEnd[nEventCount] - iEventStart[nEventCount] + 1) >= EVT_MIN_EVENT_LEN THEN
-        nEventCount := nEventCount + 1;
-    END_IF
-END_IF
-
-IF nEventCount < EVT_MIN_EVENTS THEN
-    nEventCount := 0;
-    RunSegmentation := FALSE;
-    RETURN;
-END_IF
-
-// 3) 形状判定：扫每个事件的平台
-FOR k := 0 TO nEventCount - 1 DO
-    nPlatInEvt := 0;
-    iPlatS     := -1;
-    iPlatE     := -1;
-    rPlatLvl   := 0.0;
-    bMultiPlat := FALSE;
-    iScan      := iEventStart[k];
-
-    WHILE iScan + EVT_MIN_PLAT_LEN - 1 <= iEventEnd[k] DO
-        rWinMin := pData[iScan];
-        rWinMax := pData[iScan];
-        FOR j := 1 TO EVT_MIN_PLAT_LEN - 1 DO
-            rTgt := pData[iScan + j];
-            IF rTgt < rWinMin THEN rWinMin := rTgt; END_IF
-            IF rTgt > rWinMax THEN rWinMax := rTgt; END_IF
-        END_FOR
-
-        IF (rWinMax - rWinMin) <= rFlatThr AND rWinMax >= rThrUp THEN
-            // 找到一段平台
-            IF nPlatInEvt = 0 THEN
-                iPlatS   := iScan;
-                iPlatE   := iScan + EVT_MIN_PLAT_LEN - 1;
-                rPlatLvl := (rWinMax + rWinMin) / 2.0;
-                nPlatInEvt := 1;
-                // 向右扩展同一平台
-                bExtended := TRUE;
-                j := iPlatE + 1;
-                WHILE bExtended AND j <= iEventEnd[k] DO
-                    rTgt := pData[j];
-                    IF ABS(rTgt - rPlatLvl) <= rFlatThr THEN
-                        iPlatE := j;
-                        j := j + 1;
-                    ELSE
-                        bExtended := FALSE;
-                    END_IF
-                END_WHILE
-                iScan := iPlatE + 1;
-            ELSE
-                // 出现第二段平台 → 多平台
-                bMultiPlat := TRUE;
-                EXIT;
-            END_IF
-        ELSE
-            iScan := iScan + 1;
-        END_IF
-    END_WHILE
-
-    IF bMultiPlat THEN
-        // V1 不支持多平台事件：整个切分作废，退回逐点 ILC
-        nEventCount := 0;
-        RunSegmentation := FALSE;
-        RETURN;
-    END_IF
-
-    IF nPlatInEvt = 1 THEN
-        iEventShape[k]     := 2;        // B: 单梯形
-        iEventPlatStart[k] := iPlatS;
-        iEventPlatEnd[k]   := iPlatE;
-        // B 型用平台幅值替代峰值（更稳，不受过冲影响）
-        rEventPeak[k]      := rPlatLvl;
-    ELSE
-        iEventShape[k]     := 1;        // A: 钟形
-        iEventPlatStart[k] := -1;
-        iEventPlatEnd[k]   := -1;
-    END_IF
-END_FOR
-
-// 4) 分类：(shape, peak 桶) 相同 → 同类
-rClassGap   := EVT_CLASS_GAP_K * rRange;
-nClassCount := 0;
-FOR k := 0 TO nEventCount - 1 DO
-    iCls := -1;
-    FOR j := 0 TO nClassCount - 1 DO
-        IF iClassShape[j] = iEventShape[k]
-        AND ABS(rClassPeakRef[j] - rEventPeak[k]) <= rClassGap THEN
-            iCls := j;
-            EXIT;
-        END_IF
-    END_FOR
-    IF iCls < 0 THEN
-        IF nClassCount >= EVT_MAX_CLASSES THEN
-            // 类爆掉：切分作废
-            nEventCount := 0;
-            nClassCount := 0;
-            RunSegmentation := FALSE;
-            RETURN;
-        END_IF
-        iCls := nClassCount;
-        iClassShape[iCls]   := iEventShape[k];
-        rClassPeakRef[iCls] := rEventPeak[k];
-        // 新类的 8 段修正归零（旧波形的学习作废）
-        FOR j := 1 TO 8 DO
-            rEvtBinCorr[iCls, j] := 0.0;
-        END_FOR
-        nClassCount := nClassCount + 1;
-    END_IF
-    iEventClass[k] := iCls;
-END_FOR
-
-// 5) 建反查表
-FOR i := 0 TO nPoints - 1 DO
-    iPointToEvent[i] := -1;
-END_FOR
-FOR k := 0 TO nEventCount - 1 DO
-    FOR i := iEventStart[k] TO iEventEnd[k] DO
-        iPointToEvent[i] := k;
-    END_FOR
-END_FOR
-
-// 6) 切换到事件模式；清旧的逐点 ILC 表和事件累加器，避免遗留补偿干扰
-FOR i := 0 TO POINTS_MAX - 1 DO
-    rCorrTable5[i] := 0.0;
-END_FOR
-iPtsPerCycle5Last := 0;
-FOR k := 0 TO EVT_MAX_EVENTS - 1 DO
-    FOR j := 1 TO 8 DO
-        rEvtBinErrSum[k, j] := 0.0;
-        iEvtBinErrCnt[k, j] := 0;
-    END_FOR
-END_FOR
-
-bSegmentationOK  := TRUE;
-bEventModeActive := TRUE;
-RunSegmentation  := TRUE;
-END_METHOD
 END_FUNCTION_BLOCK
