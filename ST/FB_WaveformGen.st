@@ -10,7 +10,7 @@ VAR_INPUT
 	rHoldPct : REAL; // 梯形/水锤波保持段占比，默认0.3
 	rFallPct : REAL; // 梯形/水锤波下降段占比，默认0.1
 	rOvershoot : REAL; // 水锤波过冲幅值占比 = (Pos-Pmax)/(Pmax-Pmin)，默认0.10
-	rRingPct : REAL; // 水锤波过冲衰减段占比 (P_OS→PMax 线性回落)，默认0.07
+	rRingPct : REAL; // 水锤波过冲后稳定段占比 (指令直接给PMax)，默认0.07
 	rLowDwellPct : REAL; // 水锤波低保持段占比，默认0.48 (5段相对权重，内部归一化)
 	rDt : REAL; // 控制周期 (s)
 	bReset : BOOL; // 复位相位
@@ -232,15 +232,16 @@ CASE iWaveType OF
 5:  // ARP1383C Fig.2 水锤波形 (水锤型 / Water Hammer) — 指令面五段
     // 【五段组成 — 全部由用户显式设置，内部归一化为 sum=1】
     //   rR     快速上升段: PMin → P_overshoot (过冲峰)
-    //   rRing  过冲衰减段: P_overshoot → PMax 线性回落
-    //   rH     保压段:    PMax 平直
-    //   rF     下降段:    PMax → PMin
-    //   rLow   低保持段:  PMin
+    //   rRing  过冲后稳定段: 指令直接给 PMax (步进回落,快速返回)
+    //   rH     保压段:      PMax 平直
+    //   rF     下降段:      PMax → PMin
+    //   rLow   低保持段:    PMin
     //
     // 【对应 ARP1383C 标准】
     //   起始陡升过 PMax 形成尖峰 (1.0~1.1 P_oper 容差带)
-    //   过冲峰持续 rRing% 时间后回落到 ±4% PMax 容差带
-    //   平直保压区合计 ≥ 10% 周期 (典型 35%)
+    //   过冲峰仅在 Rise 段末瞬间出现，指令立刻步进回到 PMax
+    //   实际过冲峰的衰减由控制器跟踪+液压系统自然完成
+    //   平直保压区 (rRing + rH) 合计 ≥ 10% 周期
     //   下降至 P_min 并停留至周期末
     //
     // 【过冲峰值】
@@ -282,8 +283,9 @@ CASE iWaveType OF
         // 快速上升至过冲峰
         rTarget := rPMin + (rPeakOS - rPMin) * (rPhase / rR);
     ELSIF rPhase < (rR + rRing) THEN
-        // 过冲衰减段: P_overshoot → PMax 线性回落
-        rTarget := rPeakOS - (rPeakOS - rPMax) * ((rPhase - rR) / rRing);
+        // 过冲衰减段: 指令直接给 PMax（快速从过冲峰回到正常压力）
+        // 实际从 P_OS 到 PMax 的过渡由控制器/液压系统自然完成
+        rTarget := rPMax;
     ELSIF rPhase < (rR + rRing + rH) THEN
         // 平直保压段
         rTarget := rPMax;
@@ -376,7 +378,7 @@ IF nMffLeadSteps > 0 THEN
         IF rPhaseLead < rR THEN
             rTargetLead := rPMin + (rPeakOS - rPMin) * (rPhaseLead / rR);
         ELSIF rPhaseLead < (rR + rRing) THEN
-            rTargetLead := rPeakOS - (rPeakOS - rPMax) * ((rPhaseLead - rR) / rRing);
+            rTargetLead := rPMax;
         ELSIF rPhaseLead < (rR + rRing + rH) THEN
             rTargetLead := rPMax;
         ELSIF rPhaseLead < (rR + rRing + rH + rF) THEN
