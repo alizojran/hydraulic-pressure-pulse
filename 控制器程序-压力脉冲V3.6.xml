@@ -261,6 +261,14 @@
               <simpleValue value="0.005" />
             </initialValue>
           </variable>
+          <variable name="PP_Oil_Filter">
+            <type>
+              <REAL />
+            </type>
+            <initialValue>
+              <simpleValue value="100.0" />
+            </initialValue>
+          </variable>
           <variable name="PP_Oil_CycleReset">
             <type>
               <REAL />
@@ -344,6 +352,11 @@
           <variable name="PP_Oil_ActualPressure">
             <type>
               <REAL />
+            </type>
+          </variable>
+          <variable name="PP_Oil_ActualPressure_1ms">
+            <type>
+              <array><dimension lower="0" upper="9" /><baseType><REAL /></baseType></array>
             </type>
           </variable>
           <variable name="PP_Oil_SetpointPressure">
@@ -1219,10 +1232,10 @@ END_IF</xhtml>
 //   - [E] 指令回读区与 PC→PLC 区 [C][D][E] 一一对应, 让 HMI 验证收发一致
 // ===================================================================
 // [A] 系统状态     0   – 31    (32 W; 10 字段 = 20 W, 余 12 W)
-// [B] 油路实时    32   – 95    (64 W; 11 字段 = 22 W, 余 42 W)
+// [B] 油路实时    32   – 95    (64 W; 11 标量 + 10 元 1ms 压力数组 = 42 W, 余 22 W)
 // [C] 控制器分量  96   – 127   (32 W;  4 字段 =  8 W, 余 24 W)
 // [D] 液压站实时 128  – 159    (32 W;  6 字段 = 12 W, 余 20 W)
-// [E] 指令回读   160  – 223    (64 W; 25 字段 = 50 W, 余 14 W)
+// [E] 指令回读   160  – 223    (64 W; 26 字段 = 52 W, 余 12 W)
 // [F] 系统诊断   224  – 255    (32 W;  4 字段 =  8 W, 余 24 W)
 // [G] 设备状态   256  – 319    (64 W; 由 PRG_DeviceControl 填充)
 // [Z] 未来扩展   320  – 1999
@@ -1343,7 +1356,60 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 52-53: ARP1383C 下包络 (MPa)
 j := j + 2;
 
-// 54-95: 保留 (21 字段)
+// -- 1ms 分辨率压力缓冲 (10 采样, 54-73) --
+// PLC 1ms 任务采样, TCP 10ms 任务在每个通讯周期发送上一窗口的 10 个点
+// 索引: [0]=窗口起点(t-9ms), [9]=窗口终点(t-0ms, 最新)
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[0]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 54-55: 1ms 压力 [0] t-9ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[1]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 56-57: 1ms 压力 [1] t-8ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[2]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 58-59: 1ms 压力 [2] t-7ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[3]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 60-61: 1ms 压力 [3] t-6ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[4]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 62-63: 1ms 压力 [4] t-5ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[5]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 64-65: 1ms 压力 [5] t-4ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[6]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 66-67: 1ms 压力 [6] t-3ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[7]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 68-69: 1ms 压力 [7] t-2ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[8]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 70-71: 1ms 压力 [8] t-1ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[9]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 72-73: 1ms 压力 [9] t-0ms (最新)
+j := j + 2;
+
+// 74-95: 保留 (11 字段)
 
 
 // ===== [C] 控制器分量 (96-127) =====
@@ -1541,7 +1607,12 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 208-209: 电机转速设定 (回读)
 j := j + 2;
 
-// 210-223: 保留 (7 字段; 节内可加更多回读)
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_Filter);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 210-211: 油路滤波时间常数 (回读, ms)
+j := j + 2;
+
+// 212-223: 保留 (6 字段)
 
 
 // ===== [F] 系统诊断 (224-255) =====
@@ -2870,9 +2941,29 @@ TCP_PC_to_PLC();
                       <derived name="PWControl.LowPassFilter_R" />
                     </type>
                   </variable>
+                  <variable name="tOilFilterTau">
+                    <type>
+                      <TIME />
+                    </type>
+                  </variable>
+                  <variable name="rOilFilterTauMs">
+                    <type>
+                      <REAL />
+                    </type>
+                  </variable>
                   <variable name="PP_Oil_ActualPressure">
                     <type>
                       <REAL />
+                    </type>
+                  </variable>
+                  <variable name="nMs1msIdx">
+                    <type>
+                      <INT />
+                    </type>
+                  </variable>
+                  <variable name="rPress1msBuf_O">
+                    <type>
+                      <array><dimension lower="0" upper="9" /><baseType><REAL /></baseType></array>
                     </type>
                   </variable>
                 </localVars>
@@ -2886,8 +2977,31 @@ TCP_PC_to_PLC();
 
 //剂侧产品端压力 — 默认使用26.01低压传感器(可根据需要切换27.01)
 PP_Oil_ActualPressure := GVL_PulsePressure.PP_Dev_Pressure_26_01;
-Oil_Pressure_Filter(in:= PP_Oil_ActualPressure,t:= T#100MS);
+
+// 滤波时间常数从 GVL 取, 带范围保护 (默认 100ms; ≤1ms 视为旁路, ≥10s 限幅)
+rOilFilterTauMs := GVL_PulsePressure.PP_Oil_Filter;
+IF rOilFilterTauMs &lt; 1.0     THEN rOilFilterTauMs := 1.0;     END_IF
+IF rOilFilterTauMs &gt; 10000.0 THEN rOilFilterTauMs := 10000.0; END_IF
+tOilFilterTau := DWORD_TO_TIME(REAL_TO_DWORD(rOilFilterTauMs));
+
+Oil_Pressure_Filter(in:= PP_Oil_ActualPressure, t:= tOilFilterTau);
 GVL_PulsePressure.PP_Oil_ActualPressure := Oil_Pressure_Filter.out;
+
+// ============================================================
+// 1ms 分辨率压力缓冲 (供上位机以 10ms 通讯周期读取 10 个采样)
+// ------------------------------------------------------------
+// 本 PRG 在 1ms 任务里跑, 每周期向本地写缓冲追加一个采样;
+// 累满 10 个 (即一个完整的 10ms 窗口) 后整体复制到 GVL 数组,
+// 上位机 TCP 任务在 10ms 节拍上读到的是上一个窗口的完整 10 点序列, 无撕裂。
+// 索引语义: rPress1msBuf_O[0] 是窗口起点 (t-9ms), [9] 是窗口终点 (t-0ms, 最新)
+// ============================================================
+rPress1msBuf_O[nMs1msIdx] := GVL_PulsePressure.PP_Oil_ActualPressure;
+IF nMs1msIdx &gt;= 9 THEN
+    GVL_PulsePressure.PP_Oil_ActualPressure_1ms := rPress1msBuf_O;  // 整体快照
+    nMs1msIdx := 0;
+ELSE
+    nMs1msIdx := nMs1msIdx + 1;
+END_IF
 
 
 //方向系数
@@ -3241,7 +3355,7 @@ GVL_PulsePressure.PP_Oil_ControlOutput := rUTotal_O;</xhtml>
 // [A] 系统控制    0   – 31    (32 W;  6 字段 = 12 W, 余 20 W)
 // [B] 冲洗排气    32  – 47    (16 W;  2 字段 =  4 W, 余 12 W)
 // [C] 油路波形    48  – 95    (48 W; 15 字段 = 30 W, 余 18 W)
-// [D] 控制器      96  – 127   (32 W;  6 字段 = 12 W, 余 20 W)  ILC + PID
+// [D] 控制器      96  – 127   (32 W;  7 字段 = 14 W, 余 18 W)  ILC + PID + 滤波
 // [E] 液压站     128 – 159    (32 W;  4 字段 =  8 W, 余 24 W)
 // [F] IO 控制    160 – 191    (32 W;  2 字段 =  4 W, 余 28 W)
 // [G] 设备控制   192 – 255    (64 W; 由 PRG_DeviceControl 解析)
@@ -3386,7 +3500,11 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Oil_PID_Kd := TwoWord_to_Float.Output;             // 106-107: PID 微分增益 Kd (V·s/MPa)
 i := i + 2;
 
-// 108-127: 保留 (10 字段)
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_Filter := TwoWord_to_Float.Output;          // 108-109: 油路压力滤波时间常数 (ms), 默认 100
+i := i + 2;
+
+// 110-127: 保留 (9 字段)
 
 
 // ===== [E] 液压站 (128-159) =====
@@ -9070,7 +9188,17 @@ PRG_PneumaticValve_Control(
                       <BOOL />
                     </type>
                   </variable>
-                  <variable name="bCycleHadViolation">
+                  <variable name="bAnyOver100">
+                    <type>
+                      <BOOL />
+                    </type>
+                  </variable>
+                  <variable name="bAnyOver80">
+                    <type>
+                      <BOOL />
+                    </type>
+                  </variable>
+                  <variable name="bLearningArmed">
                     <type>
                       <BOOL />
                     </type>
@@ -9450,6 +9578,16 @@ PRG_PneumaticValve_Control(
                       <REAL />
                     </type>
                   </variable>
+                  <variable name="rEnvInUp">
+                    <type>
+                      <REAL />
+                    </type>
+                  </variable>
+                  <variable name="rEnvInLo">
+                    <type>
+                      <REAL />
+                    </type>
+                  </variable>
                 </localVars>
                 <localVars constant="true">
                   <variable name="ALPHA_Q_MIN">
@@ -9572,6 +9710,14 @@ PRG_PneumaticValve_Control(
                       <simpleValue value="2.0" />
                     </initialValue>
                   </variable>
+                  <variable name="ENV_INNER_RATIO">
+                    <type>
+                      <REAL />
+                    </type>
+                    <initialValue>
+                      <simpleValue value="0.8" />
+                    </initialValue>
+                  </variable>
                 </localVars>
               </interface>
               <body>
@@ -9653,8 +9799,10 @@ IF bReset OR NOT bEnable THEN
     rWHHoldSum := 0.0; iWHHoldCount := 0;
     rWHLowSum  := 0.0; iWHLowCount  := 0;
     bNewCyclePrev  := FALSE;
-    bCycleHadViolation := FALSE;
-    bDoLearnNow        := FALSE;
+    bAnyOver100    := FALSE;
+    bAnyOver80     := FALSE;
+    bLearningArmed := FALSE;          // 复位后从"未学习"开始, 任何 100% 越界会触发首次 arming
+    bDoLearnNow    := FALSE;
     IF NOT bEnable THEN
         RETURN;
     END_IF
@@ -9683,10 +9831,31 @@ END_IF
 // ============================================================
 IF bNewCycle AND NOT bNewCyclePrev THEN
 
-    // 包络门控: 仅当本周期 actual 越出 [rEnvLower, rEnvUpper] 时才学习。
-    // 包络未配置 (rEnvUpper &lt;= rEnvLower) 时退化为"每周期都学习", 兼容旧调用。
-    bDoLearnNow := bCycleHadViolation OR (rEnvUpper &lt;= rEnvLower);
-    bCycleHadViolation := FALSE;  // 立即重置, 下一周期重新累积
+    // 包络门控 (迟滞型):
+    //   - 进学习态: disarmed → armed, 触发条件 = 任一采样越 100% 包络
+    //   - 出学习态: armed → disarmed, 触发条件 = 整个周期所有采样都在 80% 内包络
+    //   - 不对称阈值避免临界处的 on/off 震荡。
+    //   - 包络未配置 (rEnvUpper &lt;= rEnvLower) 时退化为"每周期都学习", 兼容旧调用。
+    IF rEnvUpper &lt;= rEnvLower THEN
+        bDoLearnNow := TRUE;                 // 门控禁用 → 全部周期都学
+    ELSIF bLearningArmed THEN
+        // 当前在学习态: 本周期照学; 若 actual 已"全部回到 80% 内"则下周期起停学
+        bDoLearnNow := TRUE;
+        IF NOT bAnyOver80 THEN
+            bLearningArmed := FALSE;         // 出学习态
+        END_IF
+    ELSE
+        // 当前不在学习态: 若本周期任一采样越 100% 则进入学习态并立即学; 否则继续旁观
+        IF bAnyOver100 THEN
+            bLearningArmed := TRUE;          // 进学习态
+            bDoLearnNow := TRUE;
+        ELSE
+            bDoLearnNow := FALSE;
+        END_IF
+    END_IF
+    // 重置本周期累积标志
+    bAnyOver100 := FALSE;
+    bAnyOver80  := FALSE;
 
     // 水锤段累加器每周期复位 (无论是否学习, 否则下周期 actual 会叠加到旧值上)
     IF nWaveType = 2 THEN
@@ -9965,10 +10134,17 @@ END_IF
 // 每个采样点
 // ============================================================
 
-// 包络越界跟踪 (本周期内有任一采样越界 → bDoLearnNow 在下一个 bNewCycle 被置 TRUE)
+// 包络越界跟踪 (迟滞门控): 同步收集 100% 与 80% 两套越界标志, 由 bNewCycle 边界决定 arm/disarm
+//   bAnyOver100: 至少一个采样越出 ARP1383C 100% 包络 (硬边界, 触发 arm)
+//   bAnyOver80:  至少一个采样越出 80% 内包络 (软边界, 用于判定 disarm 条件: 全周期 ≤ 80%)
 IF rEnvUpper &gt; rEnvLower THEN
+    rEnvInUp := rTargetRaw + ENV_INNER_RATIO * (rEnvUpper - rTargetRaw);
+    rEnvInLo := rTargetRaw - ENV_INNER_RATIO * (rTargetRaw - rEnvLower);
     IF (rActual &gt; rEnvUpper) OR (rActual &lt; rEnvLower) THEN
-        bCycleHadViolation := TRUE;
+        bAnyOver100 := TRUE;   // 100% 越界 → 蕴含 80% 越界
+        bAnyOver80  := TRUE;
+    ELSIF (rActual &gt; rEnvInUp) OR (rActual &lt; rEnvInLo) THEN
+        bAnyOver80  := TRUE;   // 仅 80% 越界 (在 80%~100% 之间)
     END_IF
 END_IF
 
