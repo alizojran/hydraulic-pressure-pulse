@@ -60,6 +60,11 @@ def arrow(x1, y1, x2, y2, color=C_ARROW, lw=1.6, style='-|>'):
     ax.add_patch(a)
 
 
+def line(x1, y1, x2, y2, color=C_ARROW, lw=1.6):
+    """无箭头线段, 用于折线的非末端段."""
+    ax.plot([x1, x2], [y1, y2], color=color, linewidth=lw, solid_capstyle='round')
+
+
 def label_h(x, y, text, color=C_ARROW, size=9, dy=0.25):
     """水平箭头标签: 放在上方."""
     ax.text(x, y + dy, text, ha='center', va='bottom', fontsize=size, color=color, style='italic')
@@ -128,8 +133,8 @@ ax.text((WAVE_X+WAVE_W + ILC_X)/2, WAVE_Y + WAVE_H*0.55 + 0.25,
         'rTargetRaw', ha='center', va='bottom', fontsize=9, color=C_WAVE, style='italic')
 
 # 2) WaveGen → SUM1 (左侧下行 + 横折到 SUM1 左侧 +)
-#    走线避开 ILC 的下行路径
-arrow(WAVE_CX, WAVE_Y, WAVE_CX, SUM1_Y, color=C_WAVE, lw=1.7)
+#    折线: 下行段无箭头, 末段才出箭头
+line(WAVE_CX, WAVE_Y, WAVE_CX, SUM1_Y, color=C_WAVE, lw=1.7)
 arrow(WAVE_CX, SUM1_Y, SUM1_X - 0.28, SUM1_Y, color=C_WAVE, lw=1.7)
 
 # 3) ILC → SUM1 (顶部下行)
@@ -161,10 +166,9 @@ arrow(CHAM_X, CHAM_Y + CHAM_H/2, SEN_X + SEN_W, SEN_Y + SEN_H/2, color=C_FB, lw=
 ax.text((CHAM_X + SEN_X + SEN_W)/2, SEN_Y + SEN_H/2 + 0.25,
         '物理压力', ha='center', va='bottom', fontsize=8.5, color=C_FB, style='italic')
 
-# 9) 传感器 → SUM2 - 输入 (左侧上行 + 横折)
-#    要避开左上角的 WaveGen 块
+# 9) 传感器 → SUM2 - 输入 (左侧上行 + 横折; 折线末端才出箭头)
 FB_X = SEN_CX  # 2.1
-arrow(FB_X, SEN_Y + SEN_H, FB_X, SUM2_Y, color=C_FB, lw=1.5)
+line(FB_X, SEN_Y + SEN_H, FB_X, SUM2_Y, color=C_FB, lw=1.5)
 arrow(FB_X, SUM2_Y, SUM2_X - 0.28, SUM2_Y, color=C_FB, lw=1.5)
 # rActual 标签放线左侧
 ax.text(FB_X - 0.30, (SEN_Y + SEN_H + SUM2_Y)/2, 'rActual (MPa)\n反馈',
