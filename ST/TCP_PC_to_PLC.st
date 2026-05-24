@@ -162,7 +162,7 @@ GVL_PulsePressure.PP_Oil_PID_Kd := TwoWord_to_Float.Output;             // 106-1
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_FilterTau := TwoWord_to_Float.Output;          // 108-109: 油路压力滤波时间常数 (ms), 默认 100
+GVL_PulsePressure.PP_Oil_Filter := TwoWord_to_Float.Output;          // 108-109: 油路压力滤波时间常数 (ms), 默认 100
 i := i + 2;
 
 // 110-127: 保留 (9 字段)

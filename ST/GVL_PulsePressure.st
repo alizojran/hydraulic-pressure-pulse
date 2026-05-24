@@ -27,7 +27,7 @@ VAR_GLOBAL
 	PP_Oil_PID_Kp : REAL := 2.0; // 油路 PID 比例增益 (V/MPa)
 	PP_Oil_PID_Ki : REAL := 0.5; // 油路 PID 积分增益 (V/MPa/s)
 	PP_Oil_PID_Kd : REAL := 0.005; // 油路 PID 微分增益 (V·s/MPa)
-	PP_Oil_FilterTau : REAL := 100.0; // 油路压力低通滤波时间常数 (ms), 默认 100; 设为 ≤1 旁路 (= 不滤波)
+	PP_Oil_Filter : REAL := 100.0; // 油路压力低通滤波时间常数 (ms), 默认 100; 设为 ≤1 旁路 (= 不滤波)
 	PP_Oil_CycleReset : REAL; // 油路循环计数清零命令(上升沿有效)
 	PP_Hydro_HighLimit : REAL; // 液压站高压保护限值(MPa)
 	PP_Hydro_TempLimit : REAL; // 液压油温度保护限值(°C)

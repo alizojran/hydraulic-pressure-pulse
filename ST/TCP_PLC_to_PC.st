@@ -390,7 +390,7 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 208-209: 电机转速设定 (回读)
 j := j + 2;
 
-Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_FilterTau);
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_Filter);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 210-211: 油路滤波时间常数 (回读, ms)
 j := j + 2;
