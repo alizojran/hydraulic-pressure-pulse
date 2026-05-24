@@ -163,6 +163,7 @@ VAR
 	iEvtBinErrCnt     : ARRAY[0..31, 1..8] OF INT;
 	// 事件型运行时临时变量
 	iEvtK, iEvtCls, iEvtBinIdx, iEvtLen, iEvtLocal, iEvtPoolCnt : INT;
+	iEvtLutIdx : INT;          // iPointIndex(扫描空间) → LUT 空间映射结果
 	rEvtFrac, rEvtCorr, rEvtPoolErr, rEvtPoolMean, rEvtBinCorrLim : REAL;
 	iEvtBb : INT;
 	// 直线波 (nWaveType=6) 临时变量
@@ -1026,14 +1027,21 @@ IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 AND rHalfRange > 0.001 T
 END_IF
 
 // --------- 任意波 (nWaveType=5) 误差累加 ---------
-IF nWaveType = 5 AND iIterCount >= 1 AND iPointsPerCycle <= POINTS_MAX THEN
-    IF bEventModeActive THEN
-        // 事件型：按 (事件, bin) 累加
-        iEvtK := iPointToEvent[iPointIndex];
+// 事件型：iPointToEvent 按 LUT 索引建表（≤ nSegmentPoints ≤ POINTS_MAX）；
+// iPointIndex(扫描空间，可超 POINTS_MAX) 需先映射到 LUT 空间再查表
+// 逐点 ILC：rCorrTable5/rErrSum5 按扫描空间索引，仍受 iPointsPerCycle ≤ POINTS_MAX 限制
+IF nWaveType = 5 AND iIterCount >= 1 THEN
+    IF bEventModeActive AND nSegmentPoints > 0 AND iPointsPerCycle > 0 THEN
+        // 扫描空间 → LUT 空间（即便 iPointsPerCycle 远大于 nSegmentPoints 也安全）
+        iEvtLutIdx := REAL_TO_INT(INT_TO_REAL(iPointIndex) * INT_TO_REAL(nSegmentPoints)
+                                / INT_TO_REAL(iPointsPerCycle));
+        IF iEvtLutIdx < 0                 THEN iEvtLutIdx := 0;                  END_IF
+        IF iEvtLutIdx >= nSegmentPoints   THEN iEvtLutIdx := nSegmentPoints - 1; END_IF
+        iEvtK := iPointToEvent[iEvtLutIdx];
         IF iEvtK >= 0 AND iEvtK < nEventCount THEN
             iEvtLen := iEventEnd[iEvtK] - iEventStart[iEvtK] + 1;
             IF iEvtLen >= 1 THEN
-                iEvtLocal := iPointIndex - iEventStart[iEvtK];
+                iEvtLocal := iEvtLutIdx - iEventStart[iEvtK];
                 IF iEvtLocal < 0           THEN iEvtLocal := 0;            END_IF
                 IF iEvtLocal >= iEvtLen    THEN iEvtLocal := iEvtLen - 1;  END_IF
                 rEvtFrac := INT_TO_REAL(iEvtLocal) / INT_TO_REAL(iEvtLen);
@@ -1044,8 +1052,8 @@ IF nWaveType = 5 AND iIterCount >= 1 AND iPointsPerCycle <= POINTS_MAX THEN
                 iEvtBinErrCnt[iEvtK, iEvtBinIdx] := iEvtBinErrCnt[iEvtK, iEvtBinIdx] + 1;
             END_IF
         END_IF
-    ELSE
-        // 逐点 ILC（回退路径）
+    ELSIF NOT bEventModeActive AND iPointsPerCycle <= POINTS_MAX THEN
+        // 逐点 ILC（回退路径，扫描空间表，受 POINTS_MAX 限制）
         iIdx5 := iPointIndex;
         IF iIdx5 < 0                THEN iIdx5 := 0;                  END_IF
         IF iIdx5 >= iPointsPerCycle THEN iIdx5 := iPointsPerCycle - 1; END_IF
@@ -1113,17 +1121,20 @@ IF NOT bVInitialized THEN
 END_IF
 
 // 任意波 (nWaveType=5)：事件型 / 逐点 ILC 两条路径，跳过 vMin/vMax 仿射重映射
-// iPointsPerCycle > POINTS_MAX 时降级透传
+// 事件型：iPointToEvent 在 LUT 空间，扫描索引先映射；不受 iPointsPerCycle 大小限制
+// 逐点 ILC：rCorrTable5 在扫描空间，iPointsPerCycle > POINTS_MAX 时降级透传
 IF nWaveType = 5 THEN
-    IF iPointsPerCycle > POINTS_MAX THEN
-        rVirtualTarget := rTargetRaw;
-    ELSIF bEventModeActive THEN
-        // 事件型：查反查表 → 类 → 类的 8 段幅值修正
-        iEvtK := iPointToEvent[iPointIndex];
+    IF bEventModeActive AND nSegmentPoints > 0 AND iPointsPerCycle > 0 THEN
+        // 扫描空间 → LUT 空间
+        iEvtLutIdx := REAL_TO_INT(INT_TO_REAL(iPointIndex) * INT_TO_REAL(nSegmentPoints)
+                                / INT_TO_REAL(iPointsPerCycle));
+        IF iEvtLutIdx < 0                 THEN iEvtLutIdx := 0;                  END_IF
+        IF iEvtLutIdx >= nSegmentPoints   THEN iEvtLutIdx := nSegmentPoints - 1; END_IF
+        iEvtK := iPointToEvent[iEvtLutIdx];
         IF iEvtK >= 0 AND iEvtK < nEventCount THEN
             iEvtCls := iEventClass[iEvtK];
             iEvtLen := iEventEnd[iEvtK] - iEventStart[iEvtK] + 1;
-            iEvtLocal := iPointIndex - iEventStart[iEvtK];
+            iEvtLocal := iEvtLutIdx - iEventStart[iEvtK];
             IF iEvtLocal < 0           THEN iEvtLocal := 0;            END_IF
             IF iEvtLocal >= iEvtLen    THEN iEvtLocal := iEvtLen - 1;  END_IF
             IF iEvtLen >= 1 THEN
@@ -1139,12 +1150,15 @@ IF nWaveType = 5 THEN
             // 基线段：透传
             rVirtualTarget := rTargetRaw;
         END_IF
-    ELSE
-        // 逐点 ILC（回退路径）
+    ELSIF NOT bEventModeActive AND iPointsPerCycle <= POINTS_MAX THEN
+        // 逐点 ILC（回退路径，扫描空间表，受 POINTS_MAX 限制）
         iIdx5 := iPointIndex;
         IF iIdx5 < 0                THEN iIdx5 := 0;                  END_IF
         IF iIdx5 >= iPointsPerCycle THEN iIdx5 := iPointsPerCycle - 1; END_IF
         rVirtualTarget := rTargetRaw + rCorrTable5[iIdx5];
+    ELSE
+        // 既未走事件型也超出逐点 ILC 容量：透传
+        rVirtualTarget := rTargetRaw;
     END_IF
     rOutput        := rVirtualTarget - rTargetRaw;
     bNewCyclePrev  := bNewCycle;
