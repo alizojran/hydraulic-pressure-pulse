@@ -141,7 +141,7 @@ VAR
 	iRight5     : INT;                    // Q-filter 右邻
 	rMeanErr5   : REAL;                   // 平滑后单点误差
 	rCorrLimit5 : REAL;                   // 单点修正限幅
-	// --- 事件型 ILC 状态（nWaveType=5 内部自动升级，V1：A/B 共用 8 段幅值修正）---
+	// --- 事件型 ILC 状态（nWaveType=5 内部自动升级，V4.2：per-event α 时间扭曲 + 幅值偏置）---
 	bEventModeActive  : BOOL;             // 事件型路径生效
 	bSegmentationOK   : BOOL;             // 最近一次切分成功标志（诊断用）
 	iSegFailPhase     : INT;              // 切分失败阶段：0=成功 1=入参 2=幅值范围 3=事件数 4=多平台 5=类数超限
@@ -153,20 +153,27 @@ VAR
 	rEventPeak        : ARRAY[0..31] OF REAL;  // 事件峰值（B 型为平台幅值）
 	iEventPlatStart   : ARRAY[0..31] OF INT;   // B 型平台起点（-1 表 A 型）
 	iEventPlatEnd     : ARRAY[0..31] OF INT;   // B 型平台终点
-	iEventClass       : ARRAY[0..31] OF INT;   // 所属类索引
+	iEventClass       : ARRAY[0..31] OF INT;   // 所属类索引（V4.2 仅保留诊断，学习按事件实例独立）
 	iPointToEvent     : ARRAY[0..999] OF INT;  // 反查表：-1=基线段 否则=事件索引
-	// 类学习器
+	// 类学习器（V4.2 仅保留诊断，不再参与修正合并）
 	nClassCount       : INT;
 	iClassShape       : ARRAY[0..7] OF INT;
 	rClassPeakRef     : ARRAY[0..7] OF REAL;
-	rEvtBinCorr       : ARRAY[0..7, 1..8] OF REAL;  // 每类 8 段幅值修正 (MPa)
-	// 周期内误差累加（按事件实例 × bin）
-	rEvtBinErrSum     : ARRAY[0..31, 1..8] OF REAL;
-	iEvtBinErrCnt     : ARRAY[0..31, 1..8] OF INT;
+	// 每事件独立的 α + 幅值偏置（V4.2 替换旧的 per-class bin 幅值修正）
+	rEvtAlphaCmd      : ARRAY[0..31, 1..8] OF REAL;  // 每事件 8 段相位时长占比（Σ=1，初值 0.125）
+	rEvtAlphaTgt      : ARRAY[0..31, 1..8] OF REAL;  // 周期内 tgt 各 bin 占比（诊断 + 学习中间量）
+	rEvtAlphaFb       : ARRAY[0..31, 1..8] OF REAL;  // 周期内 fb 各 bin 占比（诊断 + 学习中间量）
+	iEvtTgtBin        : ARRAY[0..31, 1..8] OF INT;   // 周期内 tgt 落入各 bin 的样本计数
+	iEvtFbBin         : ARRAY[0..31, 1..8] OF INT;   // 周期内 fb 落入各 bin 的样本计数
+	iEvtBinTotal      : ARRAY[0..31] OF INT;         // 周期内事件总样本数（用作分母）
+	rEvtAmpBias       : ARRAY[0..31] OF REAL;        // 每事件单值幅值偏置（MPa）
+	rEvtMaxActual     : ARRAY[0..31] OF REAL;        // 周期内 fb 在该事件内的最大值（用于 bias 更新）
 	// 事件型运行时临时变量
-	iEvtK, iEvtCls, iEvtBinIdx, iEvtLen, iEvtLocal, iEvtPoolCnt : INT;
+	iEvtK, iEvtBinIdx, iEvtLen, iEvtLocal : INT;
 	iEvtLutIdx : INT;          // iPointIndex(扫描空间) → LUT 空间映射结果
-	rEvtFrac, rEvtCorr, rEvtPoolErr, rEvtPoolMean, rEvtBinCorrUpLim, rEvtBinCorrDnLim, rEvtDelta, rEvtDeltaMax : REAL;
+	rEvtTau, rEvtT1, rEvtT2, rEvtT3, rEvtT4, rEvtT5, rEvtT6, rEvtT7 : REAL;
+	rEvtPhiStd, rEvtWarpedY, rEvtBiasLim, rEvtAlphaSum, rEvtDeltaSeg, rEvtBinErr, rEvtPeakErr : REAL;
+	rEvtVNorm : REAL;          // 归一化幅值（v / rEventPeak[k]）
 	iEvtBb : INT;
 	// 直线波 (nWaveType=6) 临时变量
 	rLinearDelta : REAL;        // 每周期最大步长 = rLinearRate · rDt
@@ -229,10 +236,9 @@ VAR CONSTANT
 	EVT_MIN_EVENT_LEN : INT  := 6;        // 最短事件点数
 	EVT_CLASS_GAP_K   : REAL := 0.10;     // 类间距：|peak_a - peak_b| ≤ K · 全程 视为同类
 	EVT_MIN_EVENTS    : INT  := 2;        // 事件数 < 此值则不启用事件型
-	EVT_BIN_CORR_LR   : REAL := 0.10;     // 类 bin 幅值修正学习率（配合下面的单周期增量限幅；0.15 LR 单步过大会引发收敛瞬态超调）
-	EVT_BIN_CORR_LIM_UP_K: REAL := 0.3;   // 类 bin UP 修正限幅：K · 全程（防 ILC 把虚拟目标顶到 actual 过冲；上行 0.3 比对称 0.5 紧）
-	EVT_BIN_CORR_LIM_DN_K: REAL := 0.5;   // 类 bin DOWN 修正限幅：K · 全程（落沿压制保留宽限幅，让 ILC 能把虚拟目标拉低足够多以加速落沿）
-	EVT_BIN_DELTA_K   : REAL := 0.02;     // 类 bin 单周期增量限幅：K · 全程（防止 LR×大误差一拍跨过最优修正，强制多周期渐进逼近）
+	EVT_ALPHA_LR      : REAL := 0.15;     // 每事件 α 学习率（α 是 8 段时长占比，归一化后 Σ=1）
+	EVT_BIAS_LR       : REAL := 0.10;     // 每事件幅值偏置学习率
+	EVT_BIAS_LIM_K    : REAL := 0.3;      // 幅值偏置限幅：±K · rEventPeak[k]（按本事件峰值缩放）
 END_VAR
 // ============================================================
 // 授权检查（首次调用懒加载，每次启动只查一次）
@@ -463,9 +469,6 @@ IF bSegmentTrigger AND NOT bSegmentTriggerPrev THEN
                 iSegCls := nClassCount;
                 iClassShape[iSegCls]   := iEventShape[iSegK];
                 rClassPeakRef[iSegCls] := rEventPeak[iSegK];
-                FOR iSegJ := 1 TO 8 DO
-                    rEvtBinCorr[iSegCls, iSegJ] := 0.0;
-                END_FOR
                 nClassCount := nClassCount + 1;
             END_IF
             iEventClass[iSegK] := iSegCls;
@@ -491,11 +494,17 @@ IF bSegmentTrigger AND NOT bSegmentTriggerPrev THEN
             rCorrTable5[iSegI] := 0.0;
         END_FOR
         iPtsPerCycle5Last := 0;
-        // 清事件累加器
+        // 初始化每事件 α + bias + 累加器（α 均匀 0.125 表示无相位扭曲）
         FOR iSegK := 0 TO EVT_MAX_EVENTS - 1 DO
+            rEvtAmpBias[iSegK]   := 0.0;
+            rEvtMaxActual[iSegK] := 0.0;
+            iEvtBinTotal[iSegK]  := 0;
             FOR iSegJ := 1 TO 8 DO
-                rEvtBinErrSum[iSegK, iSegJ] := 0.0;
-                iEvtBinErrCnt[iSegK, iSegJ] := 0;
+                rEvtAlphaCmd[iSegK, iSegJ] := 0.125;
+                rEvtAlphaTgt[iSegK, iSegJ] := 0.125;
+                rEvtAlphaFb[iSegK, iSegJ]  := 0.125;
+                iEvtTgtBin[iSegK, iSegJ]   := 0;
+                iEvtFbBin[iSegK, iSegJ]    := 0;
             END_FOR
         END_FOR
         bSegmentationOK  := TRUE;
@@ -547,14 +556,21 @@ IF bReset OR NOT bEnable THEN
             rCorrTable5[iBinK] := 0.0;
         END_FOR
         iPtsPerCycle5Last := 0;
-        // 事件型 ILC：清切分结果 + 类学习器
+        // 事件型 ILC：清切分结果 + per-event α + bias 学习器
         bEventModeActive := FALSE;
         bSegmentationOK  := FALSE;
         nEventCount      := 0;
         nClassCount      := 0;
-        FOR iEvtK := 0 TO EVT_MAX_CLASSES - 1 DO
+        FOR iEvtK := 0 TO EVT_MAX_EVENTS - 1 DO
+            rEvtAmpBias[iEvtK]   := 0.0;
+            rEvtMaxActual[iEvtK] := 0.0;
+            iEvtBinTotal[iEvtK]  := 0;
             FOR iEvtBb := 1 TO 8 DO
-                rEvtBinCorr[iEvtK, iEvtBb] := 0.0;
+                rEvtAlphaCmd[iEvtK, iEvtBb] := 0.125;
+                rEvtAlphaTgt[iEvtK, iEvtBb] := 0.125;
+                rEvtAlphaFb[iEvtK, iEvtBb]  := 0.125;
+                iEvtTgtBin[iEvtK, iEvtBb]   := 0;
+                iEvtFbBin[iEvtK, iEvtBb]    := 0;
             END_FOR
         END_FOR
     END_IF
@@ -584,11 +600,13 @@ IF bReset OR NOT bEnable THEN
         rErrSum5[iBinK] := 0.0;
         iErrCnt5[iBinK] := 0;
     END_FOR
-    // 事件型 ILC：清周期内 (事件 × bin) 累加器
+    // 事件型 ILC：清周期内 bin 计数 + 最大值追踪
     FOR iEvtK := 0 TO EVT_MAX_EVENTS - 1 DO
+        iEvtBinTotal[iEvtK]  := 0;
+        rEvtMaxActual[iEvtK] := 0.0;
         FOR iEvtBb := 1 TO 8 DO
-            rEvtBinErrSum[iEvtK, iEvtBb] := 0.0;
-            iEvtBinErrCnt[iEvtK, iEvtBb] := 0;
+            iEvtTgtBin[iEvtK, iEvtBb] := 0;
+            iEvtFbBin[iEvtK, iEvtBb]  := 0;
         END_FOR
     END_FOR
     bNewCyclePrev  := FALSE;
@@ -747,45 +765,54 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // 事件型 ILC (nWaveType=5 自动升级)：每类 8 段幅值修正，同类事件实例做样本池化
-            // 模型：rVirtualTarget[i] = rTargetRaw[i] + rEvtBinCorr[class(i), bin(i)]
-            //       周期末对每个类 c，把该类所有事件实例的 bin 误差均值汇总 → 类级更新
-            IF bAlphaEnable AND nWaveType = 5 AND bEventModeActive AND nClassCount > 0 THEN
-                rEvtBinCorrUpLim := EVT_BIN_CORR_LIM_UP_K * rPrevTargetRange;
-                IF rEvtBinCorrUpLim < 0.001 THEN rEvtBinCorrUpLim := 0.001; END_IF
-                rEvtBinCorrDnLim := EVT_BIN_CORR_LIM_DN_K * rPrevTargetRange;
-                IF rEvtBinCorrDnLim < 0.001 THEN rEvtBinCorrDnLim := 0.001; END_IF
-                rEvtDeltaMax := EVT_BIN_DELTA_K * rPrevTargetRange;
-                IF rEvtDeltaMax < 0.0001 THEN rEvtDeltaMax := 0.0001; END_IF
-                FOR iEvtCls := 0 TO nClassCount - 1 DO
-                    FOR iEvtBb := 1 TO 8 DO
-                        rEvtPoolErr := 0.0;
-                        iEvtPoolCnt := 0;
-                        FOR iEvtK := 0 TO nEventCount - 1 DO
-                            IF iEventClass[iEvtK] = iEvtCls AND iEvtBinErrCnt[iEvtK, iEvtBb] > 0 THEN
-                                rEvtPoolErr := rEvtPoolErr
-                                            + rEvtBinErrSum[iEvtK, iEvtBb] / INT_TO_REAL(iEvtBinErrCnt[iEvtK, iEvtBb]);
-                                iEvtPoolCnt := iEvtPoolCnt + 1;
-                            END_IF
-                        END_FOR
-                        IF iEvtPoolCnt > 0 THEN
-                            rEvtPoolMean := rEvtPoolErr / INT_TO_REAL(iEvtPoolCnt);
-                            rEvtDelta := EVT_BIN_CORR_LR * rEvtPoolMean;
-                            // 单周期增量限幅：禁止一拍跨过最优修正
-                            IF rEvtDelta >  rEvtDeltaMax THEN rEvtDelta :=  rEvtDeltaMax; END_IF
-                            IF rEvtDelta < -rEvtDeltaMax THEN rEvtDelta := -rEvtDeltaMax; END_IF
-                            rEvtBinCorr[iEvtCls, iEvtBb] := rEvtBinCorr[iEvtCls, iEvtBb] + rEvtDelta;
-                            // 总量限幅：UP / DOWN 独立（UP 紧防 actual 过冲，DOWN 宽保留落沿压制能力）
-                            IF rEvtBinCorr[iEvtCls, iEvtBb] >  rEvtBinCorrUpLim THEN rEvtBinCorr[iEvtCls, iEvtBb] :=  rEvtBinCorrUpLim; END_IF
-                            IF rEvtBinCorr[iEvtCls, iEvtBb] < -rEvtBinCorrDnLim THEN rEvtBinCorr[iEvtCls, iEvtBb] := -rEvtBinCorrDnLim; END_IF
-                        END_IF
-                    END_FOR
-                END_FOR
-                // 清本周期 (事件 × bin) 累加器
+            // 事件型 ILC (nWaveType=5 自动升级)：每事件独立 α 时间扭曲 + 单值幅值偏置
+            // 模型：rVirtualTarget[i] = rEventPeak[k] · (1 - cos(2π · α_warp(τ))) / 2 + rEvtAmpBias[k]
+            //   - α 学习：按 tgt / fb 的 8 段(值+方向)分布差更新 cmd 段时长（同正弦 α 算法）
+            //   - bias 学习：按事件峰值误差（rEventPeak - max(actual_in_event)）更新单值偏置
+            IF bAlphaEnable AND nWaveType = 5 AND bEventModeActive AND nEventCount > 0 THEN
                 FOR iEvtK := 0 TO nEventCount - 1 DO
+                    IF iEvtBinTotal[iEvtK] > 0 THEN
+                        // 1) 算 tgt / fb 各 bin 占比
+                        FOR iEvtBb := 1 TO 8 DO
+                            rEvtAlphaTgt[iEvtK, iEvtBb] := INT_TO_REAL(iEvtTgtBin[iEvtK, iEvtBb])
+                                                          / INT_TO_REAL(iEvtBinTotal[iEvtK]);
+                            rEvtAlphaFb[iEvtK, iEvtBb]  := INT_TO_REAL(iEvtFbBin[iEvtK, iEvtBb])
+                                                          / INT_TO_REAL(iEvtBinTotal[iEvtK]);
+                        END_FOR
+                        // 2) α 更新：cmd += LR · (tgt - fb)，逐 bin 限幅
+                        FOR iEvtBb := 1 TO 8 DO
+                            rEvtBinErr := rEvtAlphaTgt[iEvtK, iEvtBb] - rEvtAlphaFb[iEvtK, iEvtBb];
+                            rEvtAlphaCmd[iEvtK, iEvtBb] := rEvtAlphaCmd[iEvtK, iEvtBb]
+                                                          + EVT_ALPHA_LR * rEvtBinErr;
+                            IF rEvtAlphaCmd[iEvtK, iEvtBb] < ALPHA_Q_MIN THEN rEvtAlphaCmd[iEvtK, iEvtBb] := ALPHA_Q_MIN; END_IF
+                            IF rEvtAlphaCmd[iEvtK, iEvtBb] > ALPHA_Q_MAX THEN rEvtAlphaCmd[iEvtK, iEvtBb] := ALPHA_Q_MAX; END_IF
+                        END_FOR
+                        // 3) 归一化使 Σα = 1
+                        rEvtAlphaSum := 0.0;
+                        FOR iEvtBb := 1 TO 8 DO
+                            rEvtAlphaSum := rEvtAlphaSum + rEvtAlphaCmd[iEvtK, iEvtBb];
+                        END_FOR
+                        IF rEvtAlphaSum > 0.001 THEN
+                            FOR iEvtBb := 1 TO 8 DO
+                                rEvtAlphaCmd[iEvtK, iEvtBb] := rEvtAlphaCmd[iEvtK, iEvtBb] / rEvtAlphaSum;
+                            END_FOR
+                        END_IF
+                        // 4) 幅值偏置更新：bias += LR · (target_peak - max_actual)
+                        rEvtPeakErr  := rEventPeak[iEvtK] - rEvtMaxActual[iEvtK];
+                        rEvtAmpBias[iEvtK] := rEvtAmpBias[iEvtK] + EVT_BIAS_LR * rEvtPeakErr;
+                        rEvtBiasLim  := EVT_BIAS_LIM_K * rEventPeak[iEvtK];
+                        IF rEvtBiasLim < 0.001 THEN rEvtBiasLim := 0.001; END_IF
+                        IF rEvtAmpBias[iEvtK] >  rEvtBiasLim THEN rEvtAmpBias[iEvtK] :=  rEvtBiasLim; END_IF
+                        IF rEvtAmpBias[iEvtK] < -rEvtBiasLim THEN rEvtAmpBias[iEvtK] := -rEvtBiasLim; END_IF
+                    END_IF
+                END_FOR
+                // 清本周期累加器 + 重置 fb 最大值（下周期重新追踪）
+                FOR iEvtK := 0 TO nEventCount - 1 DO
+                    iEvtBinTotal[iEvtK]  := 0;
+                    rEvtMaxActual[iEvtK] := 0.0;
                     FOR iEvtBb := 1 TO 8 DO
-                        rEvtBinErrSum[iEvtK, iEvtBb] := 0.0;
-                        iEvtBinErrCnt[iEvtK, iEvtBb] := 0;
+                        iEvtTgtBin[iEvtK, iEvtBb] := 0;
+                        iEvtFbBin[iEvtK, iEvtBb]  := 0;
                     END_FOR
                 END_FOR
             END_IF
@@ -1045,34 +1072,62 @@ IF (nWaveType = 3 OR nWaveType = 4) AND iIterCount >= 1 AND rHalfRange > 0.001 T
     iFbBin12[iBinK] := iFbBin12[iBinK] + 1;
 END_IF
 
-// --------- 任意波 (nWaveType=5) 误差累加 ---------
-// 事件型：iPointToEvent 按 LUT 索引建表（≤ nSegmentPoints ≤ POINTS_MAX）；
-// iPointIndex(扫描空间，可超 POINTS_MAX) 需先映射到 LUT 空间再查表
-// 逐点 ILC：rCorrTable5/rErrSum5 按扫描空间索引，仍受 iPointsPerCycle ≤ POINTS_MAX 限制
+// --------- 任意波 (nWaveType=5) 样本累加 ---------
+// 事件型：按"值 + 方向"分到 8 bin，分别累加 tgt 和 fb 的样本数（α 算法标准做法）；
+//        同时追踪 fb 在事件内的最大值，供周期末 bias 更新。
+// 逐点 ILC：回退路径，累加误差和（与原版一致）。
 IF nWaveType = 5 AND iIterCount >= 1 THEN
     IF bEventModeActive AND nSegmentPoints > 0 AND iPointsPerCycle > 0 THEN
-        // 扫描空间 → LUT 空间（即便 iPointsPerCycle 远大于 nSegmentPoints 也安全）
         iEvtLutIdx := REAL_TO_INT(INT_TO_REAL(iPointIndex) * INT_TO_REAL(nSegmentPoints)
                                 / INT_TO_REAL(iPointsPerCycle));
         IF iEvtLutIdx < 0                 THEN iEvtLutIdx := 0;                  END_IF
         IF iEvtLutIdx >= nSegmentPoints   THEN iEvtLutIdx := nSegmentPoints - 1; END_IF
         iEvtK := iPointToEvent[iEvtLutIdx];
-        IF iEvtK >= 0 AND iEvtK < nEventCount THEN
-            iEvtLen := iEventEnd[iEvtK] - iEventStart[iEvtK] + 1;
-            IF iEvtLen >= 1 THEN
-                iEvtLocal := iEvtLutIdx - iEventStart[iEvtK];
-                IF iEvtLocal < 0           THEN iEvtLocal := 0;            END_IF
-                IF iEvtLocal >= iEvtLen    THEN iEvtLocal := iEvtLen - 1;  END_IF
-                rEvtFrac := INT_TO_REAL(iEvtLocal) / INT_TO_REAL(iEvtLen);
-                iEvtBinIdx := REAL_TO_INT(rEvtFrac * 8.0) + 1;
-                IF iEvtBinIdx < 1 THEN iEvtBinIdx := 1; END_IF
-                IF iEvtBinIdx > 8 THEN iEvtBinIdx := 8; END_IF
-                rEvtBinErrSum[iEvtK, iEvtBinIdx] := rEvtBinErrSum[iEvtK, iEvtBinIdx] + (rTargetRaw - rActual);
-                iEvtBinErrCnt[iEvtK, iEvtBinIdx] := iEvtBinErrCnt[iEvtK, iEvtBinIdx] + 1;
+        IF iEvtK >= 0 AND iEvtK < nEventCount AND rEventPeak[iEvtK] > 0.001 THEN
+            // tgt bin：按 (rTargetRaw / peak, bTgtRising) 分到 8 段
+            //   rising  :  0~0.25→1, 0.25~0.5→2, 0.5~0.75→3, 0.75~1+→4
+            //   falling :  1+~0.75→5, 0.75~0.5→6, 0.5~0.25→7, 0.25~0→8
+            rEvtVNorm := rTargetRaw / rEventPeak[iEvtK];
+            IF bTgtRising THEN
+                IF      rEvtVNorm < 0.25 THEN iEvtBinIdx := 1;
+                ELSIF   rEvtVNorm < 0.50 THEN iEvtBinIdx := 2;
+                ELSIF   rEvtVNorm < 0.75 THEN iEvtBinIdx := 3;
+                ELSE                          iEvtBinIdx := 4;
+                END_IF
+            ELSE
+                IF      rEvtVNorm > 0.75 THEN iEvtBinIdx := 5;
+                ELSIF   rEvtVNorm > 0.50 THEN iEvtBinIdx := 6;
+                ELSIF   rEvtVNorm > 0.25 THEN iEvtBinIdx := 7;
+                ELSE                          iEvtBinIdx := 8;
+                END_IF
+            END_IF
+            iEvtTgtBin[iEvtK, iEvtBinIdx] := iEvtTgtBin[iEvtK, iEvtBinIdx] + 1;
+
+            // fb bin：同样规则，按 (rActual / peak, bFbRising)
+            rEvtVNorm := rActual / rEventPeak[iEvtK];
+            IF bFbRising THEN
+                IF      rEvtVNorm < 0.25 THEN iEvtBinIdx := 1;
+                ELSIF   rEvtVNorm < 0.50 THEN iEvtBinIdx := 2;
+                ELSIF   rEvtVNorm < 0.75 THEN iEvtBinIdx := 3;
+                ELSE                          iEvtBinIdx := 4;
+                END_IF
+            ELSE
+                IF      rEvtVNorm > 0.75 THEN iEvtBinIdx := 5;
+                ELSIF   rEvtVNorm > 0.50 THEN iEvtBinIdx := 6;
+                ELSIF   rEvtVNorm > 0.25 THEN iEvtBinIdx := 7;
+                ELSE                          iEvtBinIdx := 8;
+                END_IF
+            END_IF
+            iEvtFbBin[iEvtK, iEvtBinIdx] := iEvtFbBin[iEvtK, iEvtBinIdx] + 1;
+
+            iEvtBinTotal[iEvtK] := iEvtBinTotal[iEvtK] + 1;
+
+            // 追踪事件内 fb 最大值（供周期末 bias 更新）
+            IF rActual > rEvtMaxActual[iEvtK] THEN
+                rEvtMaxActual[iEvtK] := rActual;
             END_IF
         END_IF
     ELSIF NOT bEventModeActive AND iPointsPerCycle <= POINTS_MAX THEN
-        // 逐点 ILC（回退路径，扫描空间表，受 POINTS_MAX 限制）
         iIdx5 := iPointIndex;
         IF iIdx5 < 0                THEN iIdx5 := 0;                  END_IF
         IF iIdx5 >= iPointsPerCycle THEN iIdx5 := iPointsPerCycle - 1; END_IF
@@ -1139,44 +1194,76 @@ IF NOT bVInitialized THEN
     RETURN;
 END_IF
 
-// 任意波 (nWaveType=5)：事件型 / 逐点 ILC 两条路径，跳过 vMin/vMax 仿射重映射
-// 事件型：iPointToEvent 在 LUT 空间，扫描索引先映射；不受 iPointsPerCycle 大小限制
+// 任意波 (nWaveType=5)：事件型 / 逐点 ILC 两条路径
+// 事件型（V4.2）：在事件内用 α 重映射 + bias 重建半正弦：
+//   τ = (LUT 空间事件内位置) / 事件长度，∈ [0, 1]
+//   通过 rEvtAlphaCmd[k, 1..8] 把真实 τ 映射到标准相位 rPhiStd
+//   rVirtualTarget = rEventPeak[k] · (1 - cos(2π · rPhiStd)) / 2 + rEvtAmpBias[k]
+//   基线段直通 rTargetRaw（不学不补）
 // 逐点 ILC：rCorrTable5 在扫描空间，iPointsPerCycle > POINTS_MAX 时降级透传
 IF nWaveType = 5 THEN
     IF bEventModeActive AND nSegmentPoints > 0 AND iPointsPerCycle > 0 THEN
-        // 扫描空间 → LUT 空间
         iEvtLutIdx := REAL_TO_INT(INT_TO_REAL(iPointIndex) * INT_TO_REAL(nSegmentPoints)
                                 / INT_TO_REAL(iPointsPerCycle));
         IF iEvtLutIdx < 0                 THEN iEvtLutIdx := 0;                  END_IF
         IF iEvtLutIdx >= nSegmentPoints   THEN iEvtLutIdx := nSegmentPoints - 1; END_IF
         iEvtK := iPointToEvent[iEvtLutIdx];
         IF iEvtK >= 0 AND iEvtK < nEventCount THEN
-            iEvtCls := iEventClass[iEvtK];
             iEvtLen := iEventEnd[iEvtK] - iEventStart[iEvtK] + 1;
             iEvtLocal := iEvtLutIdx - iEventStart[iEvtK];
             IF iEvtLocal < 0           THEN iEvtLocal := 0;            END_IF
             IF iEvtLocal >= iEvtLen    THEN iEvtLocal := iEvtLen - 1;  END_IF
             IF iEvtLen >= 1 THEN
-                rEvtFrac := INT_TO_REAL(iEvtLocal) / INT_TO_REAL(iEvtLen);
+                rEvtTau := INT_TO_REAL(iEvtLocal) / INT_TO_REAL(iEvtLen);
             ELSE
-                rEvtFrac := 0.0;
+                rEvtTau := 0.0;
             END_IF
-            iEvtBinIdx := REAL_TO_INT(rEvtFrac * 8.0) + 1;
-            IF iEvtBinIdx < 1 THEN iEvtBinIdx := 1; END_IF
-            IF iEvtBinIdx > 8 THEN iEvtBinIdx := 8; END_IF
-            rVirtualTarget := rTargetRaw + rEvtBinCorr[iEvtCls, iEvtBinIdx];
+            // α 累积上界：rT_k = Σ_{j≤k} α_cmd[k,j]
+            rEvtT1 := rEvtAlphaCmd[iEvtK, 1];
+            rEvtT2 := rEvtT1 + rEvtAlphaCmd[iEvtK, 2];
+            rEvtT3 := rEvtT2 + rEvtAlphaCmd[iEvtK, 3];
+            rEvtT4 := rEvtT3 + rEvtAlphaCmd[iEvtK, 4];
+            rEvtT5 := rEvtT4 + rEvtAlphaCmd[iEvtK, 5];
+            rEvtT6 := rEvtT5 + rEvtAlphaCmd[iEvtK, 6];
+            rEvtT7 := rEvtT6 + rEvtAlphaCmd[iEvtK, 7];
+            // 真实 τ → 标准相位 rPhiStd（每段标准长度 0.125）
+            IF rEvtTau < rEvtT1 THEN
+                IF rEvtT1 > 0.001 THEN rEvtPhiStd := rEvtTau / rEvtT1 * 0.125; ELSE rEvtPhiStd := 0.0; END_IF
+            ELSIF rEvtTau < rEvtT2 THEN
+                rEvtDeltaSeg := rEvtT2 - rEvtT1;
+                IF rEvtDeltaSeg > 0.001 THEN rEvtPhiStd := 0.125 + (rEvtTau - rEvtT1) / rEvtDeltaSeg * 0.125; ELSE rEvtPhiStd := 0.125; END_IF
+            ELSIF rEvtTau < rEvtT3 THEN
+                rEvtDeltaSeg := rEvtT3 - rEvtT2;
+                IF rEvtDeltaSeg > 0.001 THEN rEvtPhiStd := 0.250 + (rEvtTau - rEvtT2) / rEvtDeltaSeg * 0.125; ELSE rEvtPhiStd := 0.250; END_IF
+            ELSIF rEvtTau < rEvtT4 THEN
+                rEvtDeltaSeg := rEvtT4 - rEvtT3;
+                IF rEvtDeltaSeg > 0.001 THEN rEvtPhiStd := 0.375 + (rEvtTau - rEvtT3) / rEvtDeltaSeg * 0.125; ELSE rEvtPhiStd := 0.375; END_IF
+            ELSIF rEvtTau < rEvtT5 THEN
+                rEvtDeltaSeg := rEvtT5 - rEvtT4;
+                IF rEvtDeltaSeg > 0.001 THEN rEvtPhiStd := 0.500 + (rEvtTau - rEvtT4) / rEvtDeltaSeg * 0.125; ELSE rEvtPhiStd := 0.500; END_IF
+            ELSIF rEvtTau < rEvtT6 THEN
+                rEvtDeltaSeg := rEvtT6 - rEvtT5;
+                IF rEvtDeltaSeg > 0.001 THEN rEvtPhiStd := 0.625 + (rEvtTau - rEvtT5) / rEvtDeltaSeg * 0.125; ELSE rEvtPhiStd := 0.625; END_IF
+            ELSIF rEvtTau < rEvtT7 THEN
+                rEvtDeltaSeg := rEvtT7 - rEvtT6;
+                IF rEvtDeltaSeg > 0.001 THEN rEvtPhiStd := 0.750 + (rEvtTau - rEvtT6) / rEvtDeltaSeg * 0.125; ELSE rEvtPhiStd := 0.750; END_IF
+            ELSE
+                rEvtDeltaSeg := 1.0 - rEvtT7;
+                IF rEvtDeltaSeg > 0.001 THEN rEvtPhiStd := 0.875 + (rEvtTau - rEvtT7) / rEvtDeltaSeg * 0.125; ELSE rEvtPhiStd := 0.875; END_IF
+            END_IF
+            // 重建半正弦：(1 - cos(2π·rPhiStd)) / 2 = sin²(π·rPhiStd)，在 0→0.5→1 上 0→1→0
+            rEvtWarpedY := (1.0 - COS(TWO_PI * rEvtPhiStd)) / 2.0;
+            rVirtualTarget := rEventPeak[iEvtK] * rEvtWarpedY + rEvtAmpBias[iEvtK];
         ELSE
             // 基线段：透传
             rVirtualTarget := rTargetRaw;
         END_IF
     ELSIF NOT bEventModeActive AND iPointsPerCycle <= POINTS_MAX THEN
-        // 逐点 ILC（回退路径，扫描空间表，受 POINTS_MAX 限制）
         iIdx5 := iPointIndex;
         IF iIdx5 < 0                THEN iIdx5 := 0;                  END_IF
         IF iIdx5 >= iPointsPerCycle THEN iIdx5 := iPointsPerCycle - 1; END_IF
         rVirtualTarget := rTargetRaw + rCorrTable5[iIdx5];
     ELSE
-        // 既未走事件型也超出逐点 ILC 容量：透传
         rVirtualTarget := rTargetRaw;
     END_IF
     rOutput        := rVirtualTarget - rTargetRaw;
