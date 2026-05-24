@@ -166,7 +166,7 @@ VAR
 	// 事件型运行时临时变量
 	iEvtK, iEvtCls, iEvtBinIdx, iEvtLen, iEvtLocal, iEvtPoolCnt : INT;
 	iEvtLutIdx : INT;          // iPointIndex(扫描空间) → LUT 空间映射结果
-	rEvtFrac, rEvtCorr, rEvtPoolErr, rEvtPoolMean, rEvtBinCorrLim : REAL;
+	rEvtFrac, rEvtCorr, rEvtPoolErr, rEvtPoolMean, rEvtBinCorrLim, rEvtDelta, rEvtDeltaMax : REAL;
 	iEvtBb : INT;
 	// 直线波 (nWaveType=6) 临时变量
 	rLinearDelta : REAL;        // 每周期最大步长 = rLinearRate · rDt
@@ -229,8 +229,9 @@ VAR CONSTANT
 	EVT_MIN_EVENT_LEN : INT  := 6;        // 最短事件点数
 	EVT_CLASS_GAP_K   : REAL := 0.10;     // 类间距：|peak_a - peak_b| ≤ K · 全程 视为同类
 	EVT_MIN_EVENTS    : INT  := 2;        // 事件数 < 此值则不启用事件型
-	EVT_BIN_CORR_LR   : REAL := 0.15;     // 类 bin 幅值修正学习率（0.05 太慢，30 周期后小尖仍欠调；0.15 兼顾收敛速度与稳态噪声）
-	EVT_BIN_CORR_LIM_K: REAL := 0.5;      // 类 bin 幅值修正限幅：K · 全程（0.2 太紧导致大尖超调被卡死；0.5 允许更大反向修正）
+	EVT_BIN_CORR_LR   : REAL := 0.10;     // 类 bin 幅值修正学习率（配合下面的单周期增量限幅；0.15 LR 单步过大会引发收敛瞬态超调）
+	EVT_BIN_CORR_LIM_K: REAL := 0.5;      // 类 bin 幅值修正总量限幅：K · 全程
+	EVT_BIN_DELTA_K   : REAL := 0.02;     // 类 bin 单周期增量限幅：K · 全程（防止 LR×大误差一拍跨过最优修正，强制多周期渐进逼近）
 END_VAR
 // ============================================================
 // 授权检查（首次调用懒加载，每次启动只查一次）
@@ -751,6 +752,8 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             IF bAlphaEnable AND nWaveType = 5 AND bEventModeActive AND nClassCount > 0 THEN
                 rEvtBinCorrLim := EVT_BIN_CORR_LIM_K * rPrevTargetRange;
                 IF rEvtBinCorrLim < 0.001 THEN rEvtBinCorrLim := 0.001; END_IF
+                rEvtDeltaMax := EVT_BIN_DELTA_K * rPrevTargetRange;
+                IF rEvtDeltaMax < 0.0001 THEN rEvtDeltaMax := 0.0001; END_IF
                 FOR iEvtCls := 0 TO nClassCount - 1 DO
                     FOR iEvtBb := 1 TO 8 DO
                         rEvtPoolErr := 0.0;
@@ -764,8 +767,12 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                         END_FOR
                         IF iEvtPoolCnt > 0 THEN
                             rEvtPoolMean := rEvtPoolErr / INT_TO_REAL(iEvtPoolCnt);
-                            rEvtBinCorr[iEvtCls, iEvtBb] := rEvtBinCorr[iEvtCls, iEvtBb]
-                                                          + EVT_BIN_CORR_LR * rEvtPoolMean;
+                            rEvtDelta := EVT_BIN_CORR_LR * rEvtPoolMean;
+                            // 单周期增量限幅：禁止一拍跨过最优修正
+                            IF rEvtDelta >  rEvtDeltaMax THEN rEvtDelta :=  rEvtDeltaMax; END_IF
+                            IF rEvtDelta < -rEvtDeltaMax THEN rEvtDelta := -rEvtDeltaMax; END_IF
+                            rEvtBinCorr[iEvtCls, iEvtBb] := rEvtBinCorr[iEvtCls, iEvtBb] + rEvtDelta;
+                            // 总量限幅
                             IF rEvtBinCorr[iEvtCls, iEvtBb] >  rEvtBinCorrLim THEN rEvtBinCorr[iEvtCls, iEvtBb] :=  rEvtBinCorrLim; END_IF
                             IF rEvtBinCorr[iEvtCls, iEvtBb] < -rEvtBinCorrLim THEN rEvtBinCorr[iEvtCls, iEvtBb] := -rEvtBinCorrLim; END_IF
                         END_IF
