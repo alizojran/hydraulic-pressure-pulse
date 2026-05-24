@@ -145,6 +145,7 @@ VAR
 	bEventModeActive  : BOOL;             // 事件型路径生效
 	bSegmentationOK   : BOOL;             // 最近一次切分成功标志（诊断用）
 	iSegFailPhase     : INT;              // 切分失败阶段：0=成功 1=入参 2=幅值范围 3=事件数 4=多平台 5=类数超限
+	nSegRunCount      : INT;              // 累计进入切分块的次数（=0 说明上升沿从未触发）
 	nEventCount       : INT;              // 事件数
 	iEventStart       : ARRAY[0..31] OF INT;   // 事件起点索引
 	iEventEnd         : ARRAY[0..31] OF INT;   // 事件终点索引
@@ -292,6 +293,7 @@ END_IF
 //   6) 建反查表 + 清旧逐点 ILC 表 / 累加器 + 置 bEventModeActive
 // ============================================================
 IF bSegmentTrigger AND NOT bSegmentTriggerPrev THEN
+    nSegRunCount := nSegRunCount + 1;
     bSegmentationOK  := FALSE;
     bEventModeActive := FALSE;
     nEventCount := 0;
