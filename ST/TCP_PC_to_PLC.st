@@ -16,7 +16,7 @@ END_VAR
 // [A] 系统控制    0   – 31    (32 W;  6 字段 = 12 W, 余 20 W)
 // [B] 冲洗排气    32  – 47    (16 W;  2 字段 =  4 W, 余 12 W)
 // [C] 油路波形    48  – 95    (48 W; 15 字段 = 30 W, 余 18 W)
-// [D] 控制器      96  – 127   (32 W;  6 字段 = 12 W, 余 20 W)  ILC + PID
+// [D] 控制器      96  – 127   (32 W;  7 字段 = 14 W, 余 18 W)  ILC + PID + 滤波
 // [E] 液压站     128 – 159    (32 W;  4 字段 =  8 W, 余 24 W)
 // [F] IO 控制    160 – 191    (32 W;  2 字段 =  4 W, 余 28 W)
 // [G] 设备控制   192 – 255    (64 W; 由 PRG_DeviceControl 解析)
@@ -161,7 +161,11 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Oil_PID_Kd := TwoWord_to_Float.Output;             // 106-107: PID 微分增益 Kd (V·s/MPa)
 i := i + 2;
 
-// 108-127: 保留 (10 字段)
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_FilterTau := TwoWord_to_Float.Output;          // 108-109: 油路压力滤波时间常数 (ms), 默认 100
+i := i + 2;
+
+// 110-127: 保留 (9 字段)
 
 
 // ===== [E] 液压站 (128-159) =====

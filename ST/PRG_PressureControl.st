@@ -25,6 +25,8 @@ VAR
 	rStopRampRate : REAL := 5.0; // 卸压速率 (MPa/s)
 	bOilCycleResetPrev : BOOL; // 油路循环清零上升沿检测
 	Oil_Pressure_Filter : PWControl.LowPassFilter_R;
+	tOilFilterTau : TIME; // 油路滤波器时间常数 (从 GVL.PP_Oil_FilterTau 转换)
+	rOilFilterTauMs : REAL; // 中间变量, 带范围保护
 	PP_Oil_ActualPressure : REAL;
 	nMs1msIdx : INT; // 1ms 采样缓冲写索引 (0..9, 满 10 即在 GVL 发布)
 	rPress1msBuf_O : ARRAY[0..9] OF REAL; // 油路 1ms 采样写缓冲 (本地, 写完整 10 个再整体公开)
@@ -37,7 +39,14 @@ END_VAR
 
 //剂侧产品端压力 — 默认使用26.01低压传感器(可根据需要切换27.01)
 PP_Oil_ActualPressure := GVL_PulsePressure.PP_Dev_Pressure_26_01;
-Oil_Pressure_Filter(in:= PP_Oil_ActualPressure,t:= T#100MS);
+
+// 滤波时间常数从 GVL 取, 带范围保护 (默认 100ms; ≤1ms 视为旁路, ≥10s 限幅)
+rOilFilterTauMs := GVL_PulsePressure.PP_Oil_FilterTau;
+IF rOilFilterTauMs < 1.0     THEN rOilFilterTauMs := 1.0;     END_IF
+IF rOilFilterTauMs > 10000.0 THEN rOilFilterTauMs := 10000.0; END_IF
+tOilFilterTau := DWORD_TO_TIME(REAL_TO_DWORD(rOilFilterTauMs));
+
+Oil_Pressure_Filter(in:= PP_Oil_ActualPressure, t:= tOilFilterTau);
 GVL_PulsePressure.PP_Oil_ActualPressure := Oil_Pressure_Filter.out;
 
 // ============================================================

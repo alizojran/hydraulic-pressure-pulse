@@ -18,7 +18,7 @@ END_VAR
 // [B] 油路实时    32   – 95    (64 W; 11 标量 + 10 元 1ms 压力数组 = 42 W, 余 22 W)
 // [C] 控制器分量  96   – 127   (32 W;  4 字段 =  8 W, 余 24 W)
 // [D] 液压站实时 128  – 159    (32 W;  6 字段 = 12 W, 余 20 W)
-// [E] 指令回读   160  – 223    (64 W; 25 字段 = 50 W, 余 14 W)
+// [E] 指令回读   160  – 223    (64 W; 26 字段 = 52 W, 余 12 W)
 // [F] 系统诊断   224  – 255    (32 W;  4 字段 =  8 W, 余 24 W)
 // [G] 设备状态   256  – 319    (64 W; 由 PRG_DeviceControl 填充)
 // [Z] 未来扩展   320  – 1999
@@ -390,7 +390,12 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 208-209: 电机转速设定 (回读)
 j := j + 2;
 
-// 210-223: 保留 (7 字段; 节内可加更多回读)
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_FilterTau);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 210-211: 油路滤波时间常数 (回读, ms)
+j := j + 2;
+
+// 212-223: 保留 (6 字段)
 
 
 // ===== [F] 系统诊断 (224-255) =====
