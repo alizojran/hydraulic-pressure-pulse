@@ -61,8 +61,9 @@ def arrow(x1, y1, x2, y2, color=C_ARROW, lw=1.6, style='-|>'):
 
 
 def line(x1, y1, x2, y2, color=C_ARROW, lw=1.6):
-    """无箭头线段, 用于折线的非末端段."""
-    ax.plot([x1, x2], [y1, y2], color=color, linewidth=lw, solid_capstyle='round')
+    """无箭头线段, 用于折线的非末端段; butt cap 保证与下一段直角对接, 无圆头鼓包."""
+    ax.plot([x1, x2], [y1, y2], color=color, linewidth=lw,
+            solid_capstyle='butt', solid_joinstyle='miter')
 
 
 def label_h(x, y, text, color=C_ARROW, size=9, dy=0.25):
@@ -91,19 +92,19 @@ def sum_node(x, y, sign_left='+', sign_top='+'):
 WAVE_X, WAVE_Y, WAVE_W, WAVE_H = 0.5, 11.0, 3.0, 1.3
 ILC_X,  ILC_Y,  ILC_W,  ILC_H  = 6.5, 11.0, 3.0, 1.3
 
-# 第一加和节点 (右下方, 由 WaveGen + ILC 汇入)
-SUM1_X, SUM1_Y = 7.95, 9.3
+# 第一加和节点 (右下方, 由 WaveGen + ILC 汇入); X 与 ILC/PID/valve/chamber 中心对齐到 8.0
+SUM1_X, SUM1_Y = 8.0, 9.3
 
 # 第二加和节点 (rTargetCorrected 与 rActual 求差)
-SUM2_X, SUM2_Y = 7.95, 7.2
+SUM2_X, SUM2_Y = 8.0, 7.2
 
+# 中央列对齐 (X = 8.0)
 # PID 块
-PID_X, PID_Y, PID_W, PID_H = 6.3, 4.8, 3.3, 1.4
-
+PID_X, PID_Y, PID_W, PID_H = 6.35, 4.8, 3.3, 1.4   # center = 6.35 + 1.65 = 8.0
 # 阀块
-VALV_X, VALV_Y, VALV_W, VALV_H = 6.5, 2.7, 3.0, 1.0
+VALV_X, VALV_Y, VALV_W, VALV_H = 6.5, 2.7, 3.0, 1.0  # center = 8.0
 # 试验腔
-CHAM_X, CHAM_Y, CHAM_W, CHAM_H = 6.5, 0.7, 3.0, 1.0
+CHAM_X, CHAM_Y, CHAM_W, CHAM_H = 6.5, 0.7, 3.0, 1.0  # center = 8.0
 # 传感器+滤波 (左下)
 SEN_X, SEN_Y, SEN_W, SEN_H = 0.5, 0.7, 3.2, 1.0
 
