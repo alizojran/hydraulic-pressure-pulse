@@ -26,6 +26,8 @@ VAR
 	bOilCycleResetPrev : BOOL; // 油路循环清零上升沿检测
 	Oil_Pressure_Filter : PWControl.LowPassFilter_R;
 	PP_Oil_ActualPressure : REAL;
+	nMs1msIdx : INT; // 1ms 采样缓冲写索引 (0..9, 满 10 即在 GVL 发布)
+	rPress1msBuf_O : ARRAY[0..9] OF REAL; // 油路 1ms 采样写缓冲 (本地, 写完整 10 个再整体公开)
 END_VAR
 
 {*
@@ -37,6 +39,22 @@ END_VAR
 PP_Oil_ActualPressure := GVL_PulsePressure.PP_Dev_Pressure_26_01;
 Oil_Pressure_Filter(in:= PP_Oil_ActualPressure,t:= T#100MS);
 GVL_PulsePressure.PP_Oil_ActualPressure := Oil_Pressure_Filter.out;
+
+// ============================================================
+// 1ms 分辨率压力缓冲 (供上位机以 10ms 通讯周期读取 10 个采样)
+// ------------------------------------------------------------
+// 本 PRG 在 1ms 任务里跑, 每周期向本地写缓冲追加一个采样;
+// 累满 10 个 (即一个完整的 10ms 窗口) 后整体复制到 GVL 数组,
+// 上位机 TCP 任务在 10ms 节拍上读到的是上一个窗口的完整 10 点序列, 无撕裂。
+// 索引语义: rPress1msBuf_O[0] 是窗口起点 (t-9ms), [9] 是窗口终点 (t-0ms, 最新)
+// ============================================================
+rPress1msBuf_O[nMs1msIdx] := GVL_PulsePressure.PP_Oil_ActualPressure;
+IF nMs1msIdx >= 9 THEN
+    GVL_PulsePressure.PP_Oil_ActualPressure_1ms := rPress1msBuf_O;  // 整体快照
+    nMs1msIdx := 0;
+ELSE
+    nMs1msIdx := nMs1msIdx + 1;
+END_IF
 
 
 //方向系数

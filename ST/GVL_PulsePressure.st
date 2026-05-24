@@ -43,7 +43,8 @@ VAR_GLOBAL
 	PP_CommsState : REAL; // 通讯状态（内部使用）
 	PP_FlushTimeRemaining : REAL; // 冲洗排气剩余时间(s)
 	PP_StateReady : REAL; // 状态推进就绪标志
-	PP_Oil_ActualPressure : REAL; // 油路实际压力(MPa)
+	PP_Oil_ActualPressure : REAL; // 油路实际压力(MPa) - 即时值, 兼容老接口
+	PP_Oil_ActualPressure_1ms : ARRAY[0..9] OF REAL; // 油路 1ms 分辨率压力缓冲: 上一个 10ms 窗口的 10 个采样, [0]=t-9ms, [9]=t-0ms (最新)
 	PP_Oil_SetpointPressure : REAL; // 油路当前给定压力(MPa)
 	PP_Oil_PressureError : REAL; // 油路压力偏差(MPa)
 	PP_Oil_ControlOutput : REAL; // 油路 MFF+ILC+PID 总控制输出(V)

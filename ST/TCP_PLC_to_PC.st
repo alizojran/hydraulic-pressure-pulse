@@ -15,7 +15,7 @@ END_VAR
 //   - [E] 指令回读区与 PC→PLC 区 [C][D][E] 一一对应, 让 HMI 验证收发一致
 // ===================================================================
 // [A] 系统状态     0   – 31    (32 W; 10 字段 = 20 W, 余 12 W)
-// [B] 油路实时    32   – 95    (64 W; 11 字段 = 22 W, 余 42 W)
+// [B] 油路实时    32   – 95    (64 W; 11 标量 + 10 元 1ms 压力数组 = 42 W, 余 22 W)
 // [C] 控制器分量  96   – 127   (32 W;  4 字段 =  8 W, 余 24 W)
 // [D] 液压站实时 128  – 159    (32 W;  6 字段 = 12 W, 余 20 W)
 // [E] 指令回读   160  – 223    (64 W; 25 字段 = 50 W, 余 14 W)
@@ -139,7 +139,60 @@ INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
 INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 52-53: ARP1383C 下包络 (MPa)
 j := j + 2;
 
-// 54-95: 保留 (21 字段)
+// -- 1ms 分辨率压力缓冲 (10 采样, 54-73) --
+// PLC 1ms 任务采样, TCP 10ms 任务在每个通讯周期发送上一窗口的 10 个点
+// 索引: [0]=窗口起点(t-9ms), [9]=窗口终点(t-0ms, 最新)
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[0]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 54-55: 1ms 压力 [0] t-9ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[1]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 56-57: 1ms 压力 [1] t-8ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[2]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 58-59: 1ms 压力 [2] t-7ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[3]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 60-61: 1ms 压力 [3] t-6ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[4]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 62-63: 1ms 压力 [4] t-5ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[5]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 64-65: 1ms 压力 [5] t-4ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[6]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 66-67: 1ms 压力 [6] t-3ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[7]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 68-69: 1ms 压力 [7] t-2ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[8]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 70-71: 1ms 压力 [8] t-1ms
+j := j + 2;
+
+Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_ActualPressure_1ms[9]);
+INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 72-73: 1ms 压力 [9] t-0ms (最新)
+j := j + 2;
+
+// 74-95: 保留 (11 字段)
 
 
 // ===== [C] 控制器分量 (96-127) =====
