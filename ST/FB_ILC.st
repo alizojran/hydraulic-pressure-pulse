@@ -71,7 +71,9 @@ VAR
 	bNewCyclePrev    : BOOL;
 	iIterCount       : INT;
 	bVInitialized    : BOOL;         // vMax/vMin 已初始化
-	bCycleHadViolation : BOOL;       // 本周期内 actual 是否曾越出包络
+	bAnyOver100        : BOOL;       // 本周期内 actual 是否曾越出 100% 包络 (硬边界)
+	bAnyOver80         : BOOL;       // 本周期内 actual 是否曾越出 80% 内包络 (含 100% 越界蕴含)
+	bLearningArmed     : BOOL;       // 学习态: TRUE = 正在迭代, FALSE = 已收敛停学 (跨周期保持)
 	bDoLearnNow        : BOOL;       // 本周期是否执行学习 (在 bNewCycle 边界捕获)
 	nUpdateCount     : INT;
 	rPeakErrSum      : REAL;
@@ -255,8 +257,10 @@ IF bReset OR NOT bEnable THEN
     rWHHoldSum := 0.0; iWHHoldCount := 0;
     rWHLowSum  := 0.0; iWHLowCount  := 0;
     bNewCyclePrev  := FALSE;
-    bCycleHadViolation := FALSE;
-    bDoLearnNow        := FALSE;
+    bAnyOver100    := FALSE;
+    bAnyOver80     := FALSE;
+    bLearningArmed := FALSE;          // 复位后从"未学习"开始, 任何 100% 越界会触发首次 arming
+    bDoLearnNow    := FALSE;
     IF NOT bEnable THEN
         RETURN;
     END_IF
@@ -285,10 +289,31 @@ END_IF
 // ============================================================
 IF bNewCycle AND NOT bNewCyclePrev THEN
 
-    // 包络门控: 仅当本周期 actual 越出 [rEnvLower, rEnvUpper] 时才学习。
-    // 包络未配置 (rEnvUpper <= rEnvLower) 时退化为"每周期都学习", 兼容旧调用。
-    bDoLearnNow := bCycleHadViolation OR (rEnvUpper <= rEnvLower);
-    bCycleHadViolation := FALSE;  // 立即重置, 下一周期重新累积
+    // 包络门控 (迟滞型):
+    //   - 进学习态: disarmed → armed, 触发条件 = 任一采样越 100% 包络
+    //   - 出学习态: armed → disarmed, 触发条件 = 整个周期所有采样都在 80% 内包络
+    //   - 不对称阈值避免临界处的 on/off 震荡。
+    //   - 包络未配置 (rEnvUpper <= rEnvLower) 时退化为"每周期都学习", 兼容旧调用。
+    IF rEnvUpper <= rEnvLower THEN
+        bDoLearnNow := TRUE;                 // 门控禁用 → 全部周期都学
+    ELSIF bLearningArmed THEN
+        // 当前在学习态: 本周期照学; 若 actual 已"全部回到 80% 内"则下周期起停学
+        bDoLearnNow := TRUE;
+        IF NOT bAnyOver80 THEN
+            bLearningArmed := FALSE;         // 出学习态
+        END_IF
+    ELSE
+        // 当前不在学习态: 若本周期任一采样越 100% 则进入学习态并立即学; 否则继续旁观
+        IF bAnyOver100 THEN
+            bLearningArmed := TRUE;          // 进学习态
+            bDoLearnNow := TRUE;
+        ELSE
+            bDoLearnNow := FALSE;
+        END_IF
+    END_IF
+    // 重置本周期累积标志
+    bAnyOver100 := FALSE;
+    bAnyOver80  := FALSE;
 
     // 水锤段累加器每周期复位 (无论是否学习, 否则下周期 actual 会叠加到旧值上)
     IF nWaveType = 2 THEN
@@ -567,15 +592,17 @@ END_IF
 // 每个采样点
 // ============================================================
 
-// 包络越界跟踪 (本周期内有任一采样越界 → bDoLearnNow 在下一个 bNewCycle 被置 TRUE)
-// 用 ENV_INNER_RATIO * 包络半宽作为门限, 比 ARP1383C 100% 边界更严:
-//   - actual 留在 100% 边界附近 (e.g. 95%) 时, 仍判为"越界" → 继续学习直到充分回归;
-//   - 避免 100% 阈值在边界处反复跨越导致的"一会学一会停"震荡。
+// 包络越界跟踪 (迟滞门控): 同步收集 100% 与 80% 两套越界标志, 由 bNewCycle 边界决定 arm/disarm
+//   bAnyOver100: 至少一个采样越出 ARP1383C 100% 包络 (硬边界, 触发 arm)
+//   bAnyOver80:  至少一个采样越出 80% 内包络 (软边界, 用于判定 disarm 条件: 全周期 ≤ 80%)
 IF rEnvUpper > rEnvLower THEN
     rEnvInUp := rTargetRaw + ENV_INNER_RATIO * (rEnvUpper - rTargetRaw);
     rEnvInLo := rTargetRaw - ENV_INNER_RATIO * (rTargetRaw - rEnvLower);
-    IF (rActual > rEnvInUp) OR (rActual < rEnvInLo) THEN
-        bCycleHadViolation := TRUE;
+    IF (rActual > rEnvUpper) OR (rActual < rEnvLower) THEN
+        bAnyOver100 := TRUE;   // 100% 越界 → 蕴含 80% 越界
+        bAnyOver80  := TRUE;
+    ELSIF (rActual > rEnvInUp) OR (rActual < rEnvInLo) THEN
+        bAnyOver80  := TRUE;   // 仅 80% 越界 (在 80%~100% 之间)
     END_IF
 END_IF
 
