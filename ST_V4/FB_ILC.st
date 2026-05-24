@@ -227,8 +227,8 @@ VAR CONSTANT
 	EVT_MIN_EVENT_LEN : INT  := 6;        // 最短事件点数
 	EVT_CLASS_GAP_K   : REAL := 0.10;     // 类间距：|peak_a - peak_b| ≤ K · 全程 视为同类
 	EVT_MIN_EVENTS    : INT  := 2;        // 事件数 < 此值则不启用事件型
-	EVT_BIN_CORR_LR   : REAL := 0.15;     // 类 bin 幅值修正学习率
-	EVT_BIN_CORR_LIM_K: REAL := 0.5;      // 类 bin 幅值修正限幅：K · 全程
+	EVT_BIN_CORR_LR   : REAL := 0.05;     // 类 bin 幅值修正学习率（V1 单样本类对噪声敏感，0.05 偏稳）
+	EVT_BIN_CORR_LIM_K: REAL := 0.2;      // 类 bin 幅值修正限幅：K · 全程（0.2 防单样本类学过头）
 END_VAR
 // ============================================================
 // 授权检查（首次调用懒加载，每次启动只查一次）
