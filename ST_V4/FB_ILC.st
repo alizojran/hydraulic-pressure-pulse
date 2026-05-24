@@ -144,6 +144,7 @@ VAR
 	// --- 事件型 ILC 状态（nWaveType=5 内部自动升级，V1：A/B 共用 8 段幅值修正）---
 	bEventModeActive  : BOOL;             // 事件型路径生效
 	bSegmentationOK   : BOOL;             // 最近一次切分成功标志（诊断用）
+	iSegFailPhase     : INT;              // 切分失败阶段：0=成功 1=入参 2=幅值范围 3=事件数 4=多平台 5=类数超限
 	nEventCount       : INT;              // 事件数
 	iEventStart       : ARRAY[0..31] OF INT;   // 事件起点索引
 	iEventEnd         : ARRAY[0..31] OF INT;   // 事件终点索引
@@ -297,10 +298,12 @@ IF bSegmentTrigger AND NOT bSegmentTriggerPrev THEN
     nClassCount := 0;
     bSegContinue := TRUE;
     bSegMultiPlat := FALSE;
+    iSegFailPhase := 0;
 
     // 阶段 1：入参合法性
     IF NOT (nSegmentPoints >= 2 AND nSegmentPoints <= POINTS_MAX AND pSegmentData <> 0) THEN
         bSegContinue := FALSE;
+        iSegFailPhase := 1;
     END_IF
 
     // 阶段 2：全程扫描
@@ -315,6 +318,7 @@ IF bSegmentTrigger AND NOT bSegmentTriggerPrev THEN
         rSegRange := rSegMaxAll - rSegMinAll;
         IF rSegRange < 0.05 THEN
             bSegContinue := FALSE; // 几乎是直流，没有事件结构
+            iSegFailPhase := 2;
         END_IF
     END_IF
 
@@ -359,6 +363,7 @@ IF bSegmentTrigger AND NOT bSegmentTriggerPrev THEN
         IF nEventCount < EVT_MIN_EVENTS THEN
             nEventCount := 0;
             bSegContinue := FALSE;
+            iSegFailPhase := 3;
         END_IF
     END_IF
 
@@ -428,6 +433,7 @@ IF bSegmentTrigger AND NOT bSegmentTriggerPrev THEN
             // V1 不支持多平台事件
             nEventCount := 0;
             bSegContinue := FALSE;
+            iSegFailPhase := 4;
         END_IF
     END_IF
 
@@ -447,6 +453,7 @@ IF bSegmentTrigger AND NOT bSegmentTriggerPrev THEN
             IF iSegCls < 0 THEN
                 IF nClassCount >= EVT_MAX_CLASSES THEN
                     bSegContinue := FALSE;
+                    iSegFailPhase := 5;
                     EXIT;
                 END_IF
                 iSegCls := nClassCount;
