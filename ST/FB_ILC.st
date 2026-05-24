@@ -19,7 +19,7 @@ VAR_INPUT
 	rWHRingFrac     : REAL := 0.07;  // [水锤] 段 2: 过冲衰减段归一化相位宽 (= rRing)
 	rWHHoldFrac     : REAL := 0.35;  // [水锤] 段 3: PMax 保压段归一化相位宽 (= rH)
 	rWHFallFrac     : REAL := 0.05;  // [水锤] 段 4: 下降段归一化相位宽 (= rF); 段 5 (低保持) = 1 - 上述 4 段
-	rEnvUpper       : REAL := 0.0;   // ARP1383C 包络上限 (MPa); 0 ⇒ 禁用包络门控 (退化为每周期都学习)
+	rEnvUpper       : REAL := 0.0;   // ARP1383C 包络上限 (MPa); 内部用 ENV_INNER_RATIO (默认 80%) 内缩为学习门控阈值; 0 ⇒ 禁用门控 (每周期都学习)
 	rEnvLower       : REAL := 0.0;   // ARP1383C 包络下限 (MPa)
 END_VAR
 VAR_OUTPUT
@@ -155,6 +155,8 @@ VAR
 	rWHPeakErr          : REAL;       // P_OS 峰误差
 	rWHHoldErr          : REAL;       // PMax hold 误差
 	rWHLowErr           : REAL;       // PMin low 误差
+	rEnvInUp            : REAL;       // 内缩包络上限 = rTargetRaw + ENV_INNER_RATIO * (rEnvUpper - rTargetRaw)
+	rEnvInLo            : REAL;       // 内缩包络下限
 END_VAR
 VAR CONSTANT
 	ALPHA_Q_MIN       : REAL := 0.04;
@@ -172,6 +174,7 @@ VAR CONSTANT
 	FLAT_THR_SIN      : REAL := 0.40;
 	FLAT_THR_TRAP     : REAL := 0.70;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
+	ENV_INNER_RATIO   : REAL := 0.8;     // 包络门控内缩比例: 用 80% 内包络作为学习门限, 防止 100% 边界震荡
 END_VAR
 
 
@@ -565,8 +568,13 @@ END_IF
 // ============================================================
 
 // 包络越界跟踪 (本周期内有任一采样越界 → bDoLearnNow 在下一个 bNewCycle 被置 TRUE)
+// 用 ENV_INNER_RATIO * 包络半宽作为门限, 比 ARP1383C 100% 边界更严:
+//   - actual 留在 100% 边界附近 (e.g. 95%) 时, 仍判为"越界" → 继续学习直到充分回归;
+//   - 避免 100% 阈值在边界处反复跨越导致的"一会学一会停"震荡。
 IF rEnvUpper > rEnvLower THEN
-    IF (rActual > rEnvUpper) OR (rActual < rEnvLower) THEN
+    rEnvInUp := rTargetRaw + ENV_INNER_RATIO * (rEnvUpper - rTargetRaw);
+    rEnvInLo := rTargetRaw - ENV_INNER_RATIO * (rTargetRaw - rEnvLower);
+    IF (rActual > rEnvInUp) OR (rActual < rEnvInLo) THEN
         bCycleHadViolation := TRUE;
     END_IF
 END_IF
