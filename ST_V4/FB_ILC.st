@@ -166,7 +166,7 @@ VAR
 	// 事件型运行时临时变量
 	iEvtK, iEvtCls, iEvtBinIdx, iEvtLen, iEvtLocal, iEvtPoolCnt : INT;
 	iEvtLutIdx : INT;          // iPointIndex(扫描空间) → LUT 空间映射结果
-	rEvtFrac, rEvtCorr, rEvtPoolErr, rEvtPoolMean, rEvtBinCorrLim, rEvtDelta, rEvtDeltaMax : REAL;
+	rEvtFrac, rEvtCorr, rEvtPoolErr, rEvtPoolMean, rEvtBinCorrUpLim, rEvtBinCorrDnLim, rEvtDelta, rEvtDeltaMax : REAL;
 	iEvtBb : INT;
 	// 直线波 (nWaveType=6) 临时变量
 	rLinearDelta : REAL;        // 每周期最大步长 = rLinearRate · rDt
@@ -230,7 +230,8 @@ VAR CONSTANT
 	EVT_CLASS_GAP_K   : REAL := 0.10;     // 类间距：|peak_a - peak_b| ≤ K · 全程 视为同类
 	EVT_MIN_EVENTS    : INT  := 2;        // 事件数 < 此值则不启用事件型
 	EVT_BIN_CORR_LR   : REAL := 0.10;     // 类 bin 幅值修正学习率（配合下面的单周期增量限幅；0.15 LR 单步过大会引发收敛瞬态超调）
-	EVT_BIN_CORR_LIM_K: REAL := 0.5;      // 类 bin 幅值修正总量限幅：K · 全程
+	EVT_BIN_CORR_LIM_UP_K: REAL := 0.3;   // 类 bin UP 修正限幅：K · 全程（防 ILC 把虚拟目标顶到 actual 过冲；上行 0.3 比对称 0.5 紧）
+	EVT_BIN_CORR_LIM_DN_K: REAL := 0.5;   // 类 bin DOWN 修正限幅：K · 全程（落沿压制保留宽限幅，让 ILC 能把虚拟目标拉低足够多以加速落沿）
 	EVT_BIN_DELTA_K   : REAL := 0.02;     // 类 bin 单周期增量限幅：K · 全程（防止 LR×大误差一拍跨过最优修正，强制多周期渐进逼近）
 END_VAR
 // ============================================================
@@ -750,8 +751,10 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             // 模型：rVirtualTarget[i] = rTargetRaw[i] + rEvtBinCorr[class(i), bin(i)]
             //       周期末对每个类 c，把该类所有事件实例的 bin 误差均值汇总 → 类级更新
             IF bAlphaEnable AND nWaveType = 5 AND bEventModeActive AND nClassCount > 0 THEN
-                rEvtBinCorrLim := EVT_BIN_CORR_LIM_K * rPrevTargetRange;
-                IF rEvtBinCorrLim < 0.001 THEN rEvtBinCorrLim := 0.001; END_IF
+                rEvtBinCorrUpLim := EVT_BIN_CORR_LIM_UP_K * rPrevTargetRange;
+                IF rEvtBinCorrUpLim < 0.001 THEN rEvtBinCorrUpLim := 0.001; END_IF
+                rEvtBinCorrDnLim := EVT_BIN_CORR_LIM_DN_K * rPrevTargetRange;
+                IF rEvtBinCorrDnLim < 0.001 THEN rEvtBinCorrDnLim := 0.001; END_IF
                 rEvtDeltaMax := EVT_BIN_DELTA_K * rPrevTargetRange;
                 IF rEvtDeltaMax < 0.0001 THEN rEvtDeltaMax := 0.0001; END_IF
                 FOR iEvtCls := 0 TO nClassCount - 1 DO
@@ -772,9 +775,9 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                             IF rEvtDelta >  rEvtDeltaMax THEN rEvtDelta :=  rEvtDeltaMax; END_IF
                             IF rEvtDelta < -rEvtDeltaMax THEN rEvtDelta := -rEvtDeltaMax; END_IF
                             rEvtBinCorr[iEvtCls, iEvtBb] := rEvtBinCorr[iEvtCls, iEvtBb] + rEvtDelta;
-                            // 总量限幅
-                            IF rEvtBinCorr[iEvtCls, iEvtBb] >  rEvtBinCorrLim THEN rEvtBinCorr[iEvtCls, iEvtBb] :=  rEvtBinCorrLim; END_IF
-                            IF rEvtBinCorr[iEvtCls, iEvtBb] < -rEvtBinCorrLim THEN rEvtBinCorr[iEvtCls, iEvtBb] := -rEvtBinCorrLim; END_IF
+                            // 总量限幅：UP / DOWN 独立（UP 紧防 actual 过冲，DOWN 宽保留落沿压制能力）
+                            IF rEvtBinCorr[iEvtCls, iEvtBb] >  rEvtBinCorrUpLim THEN rEvtBinCorr[iEvtCls, iEvtBb] :=  rEvtBinCorrUpLim; END_IF
+                            IF rEvtBinCorr[iEvtCls, iEvtBb] < -rEvtBinCorrDnLim THEN rEvtBinCorr[iEvtCls, iEvtBb] := -rEvtBinCorrDnLim; END_IF
                         END_IF
                     END_FOR
                 END_FOR
