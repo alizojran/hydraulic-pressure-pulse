@@ -211,6 +211,14 @@ IF bCmdChanged THEN
         2: // 运行（自动序列：油缸检查→预加压→运行）
 		    rFlushTimer := 0.0;
             InitializeControllers();
+            // 已上传过曲线但事件型被 InitializeControllers 重置了 → 重新触发切分
+            // 让用户复用之前上传的曲线时也能进事件型（不需要再点提交）
+            IF nWaterSegPts > 0 THEN
+                bWaterSegTrigger := TRUE;
+            END_IF
+            IF nOilSegPts > 0 THEN
+                bOilSegTrigger := TRUE;
+            END_IF
             // 爆破模式：清零结果与相位，重新开始一次爆破试验
             IF GVL_PulsePressure.PP_TestMode = 2.0 THEN
                 iBurstPhase_W := 5;  // 进入待机；状态3首周期会切到 0
