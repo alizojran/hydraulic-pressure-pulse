@@ -238,7 +238,7 @@ VAR CONSTANT
 	EVT_MIN_EVENTS    : INT  := 2;        // 事件数 < 此值则不启用事件型
 	EVT_ALPHA_LR      : REAL := 0.15;     // 每事件 α 学习率（α 是 8 段时长占比，归一化后 Σ=1）
 	EVT_BIAS_LR       : REAL := 0.10;     // 每事件幅值偏置学习率
-	EVT_BIAS_LIM_K    : REAL := 0.3;      // 幅值偏置限幅：±K · rEventPeak[k]（按本事件峰值缩放）
+	EVT_BIAS_LIM_K    : REAL := 0.5;      // 幅值偏置限幅：±K · rPrevTargetRange（全程缩放，避免小峰事件被自身小峰值限死）
 END_VAR
 // ============================================================
 // 授权检查（首次调用懒加载，每次启动只查一次）
@@ -800,7 +800,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                         // 4) 幅值偏置更新：bias += LR · (target_peak - max_actual)
                         rEvtPeakErr  := rEventPeak[iEvtK] - rEvtMaxActual[iEvtK];
                         rEvtAmpBias[iEvtK] := rEvtAmpBias[iEvtK] + EVT_BIAS_LR * rEvtPeakErr;
-                        rEvtBiasLim  := EVT_BIAS_LIM_K * rEventPeak[iEvtK];
+                        rEvtBiasLim  := EVT_BIAS_LIM_K * rPrevTargetRange;
                         IF rEvtBiasLim < 0.001 THEN rEvtBiasLim := 0.001; END_IF
                         IF rEvtAmpBias[iEvtK] >  rEvtBiasLim THEN rEvtAmpBias[iEvtK] :=  rEvtBiasLim; END_IF
                         IF rEvtAmpBias[iEvtK] < -rEvtBiasLim THEN rEvtAmpBias[iEvtK] := -rEvtBiasLim; END_IF
