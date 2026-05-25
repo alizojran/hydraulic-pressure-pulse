@@ -615,7 +615,9 @@ IF bReset OR NOT bEnable THEN
     END_IF
 END_IF
 
-IF iPointsPerCycle < 10 THEN
+// 周期点数太少（< 10）无法做相位分箱学习，直接静默退出
+// 例外：直线波 (nWaveType=6) 无周期概念，PRG 会传 iPointsPerCycle=0，不能在这里被误杀
+IF iPointsPerCycle < 10 AND nWaveType <> 6 THEN
     rOutput := 0.0; rVirtualTarget := 0.0; RETURN;
 END_IF
 
