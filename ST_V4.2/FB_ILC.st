@@ -237,7 +237,7 @@ VAR CONSTANT
 	EVT_CLASS_GAP_K   : REAL := 0.10;     // 类间距：|peak_a - peak_b| ≤ K · 全程 视为同类
 	EVT_MIN_EVENTS    : INT  := 2;        // 事件数 < 此值则不启用事件型
 	EVT_ALPHA_LR      : REAL := 0.15;     // 每事件 α 学习率（α 是 8 段时长占比，归一化后 Σ=1）
-	EVT_BIAS_LR       : REAL := 0.10;     // 每事件幅值偏置学习率
+	EVT_BIAS_LR       : REAL := 0.20;     // 每事件幅值偏置学习率（0.10 收敛慢，30 周期才到 95%；0.20 翻倍后 15 周期到位）
 	EVT_BIAS_LIM_K    : REAL := 0.5;      // 幅值偏置限幅：±K · rPrevTargetRange（全程缩放，避免小峰事件被自身小峰值限死）
 END_VAR
 // ============================================================
