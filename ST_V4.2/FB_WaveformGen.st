@@ -58,9 +58,20 @@ IF bReset OR NOT bEnable THEN
 END_IF
 
 // 频率保护
+// 自定义 LUT 模式下，频率 0 表示"停在 LUT 起点保持不动"（典型用法：上传一条直线波形）
+// 其它波形频率 0 没有物理意义，退回 rPMin
 IF rFrequency < 0.01 THEN
-    rTarget := rPMin;
-    rTargetPrev := rPMin;
+    IF iWaveType = 4 AND bLutValid AND iLutLen >= 1 THEN
+        rTarget := arrLUT[0];
+        rTargetPrev := arrLUT[0];
+        rTargetLast := arrLUT[0];
+        rTargetLead := arrLUT[0];
+        rTargetLeadPrev := arrLUT[0];
+        rTargetLeadLast := arrLUT[0];
+    ELSE
+        rTarget := rPMin;
+        rTargetPrev := rPMin;
+    END_IF
     RETURN;
 END_IF
 
