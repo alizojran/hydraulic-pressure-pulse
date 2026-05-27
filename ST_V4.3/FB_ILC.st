@@ -10,7 +10,8 @@ VAR_INPUT
 	iMaxIterations : INT;
 	rLearningRate : REAL := 0.3; // 端点学习率
 	rAlphaLR : REAL := 0.2; // α 学习率（正弦/三角 8 段、梯形/矩形 6 段）
-	rGroupW : REAL := 0.5; // 12 段组级修正权重（解决 bin 钳位时溢出不转移问题）；0=禁用
+	rGroupW : REAL := 1.0; // 12 段升/降段组均值加权（保证整组一起缩短，不只缩低位）；0=禁用
+	rTopPullW : REAL := 1.5; // 12 段顶平 bin 7 拉力倍率（加快顶平时段争取）；1.0=与单段一致
 	bAlphaEnable : BOOL := TRUE; // α 自学习使能（正弦/三角/梯形/矩形）
 	bPlatCorrEnable : BOOL := TRUE; // 平台 2 段幅值修正使能（仅梯形/矩形生效）
 	iWaveType : INT;            // 波形类型（与 PP_Trace_Flag 对齐）：1=正弦 2=三角 3=梯形 4=矩形 5=任意 6=直线
@@ -96,15 +97,14 @@ VAR
 	rFbPos : REAL;
 	iBinK : INT;
 	rAlphaSum : REAL;
-	rRiseTgtSum : REAL; // 12 段组级学习: 升段(bin 1~6) 指令时间占比合计
+	rRiseTgtSum : REAL; // 12 段组级学习: 升段(bin 2~6) 指令时间占比合计
 	rRiseFbSum : REAL;
-	rRiseCmdSum : REAL;
 	rFallTgtSum : REAL; // 12 段组级学习: 降段(bin 8~12) 指令时间占比合计
 	rFallFbSum : REAL;
-	rFallCmdSum : REAL;
 	rRiseGroupErr : REAL;
 	rFallGroupErr : REAL;
-	rGroupCorr : REAL;
+	rRiseMeanErr : REAL; // 升段组均值 = rRiseGroupErr/5；用于按均值加权分摊到每个升段 bin
+	rFallMeanErr : REAL; // 降段组均值 = rFallGroupErr/5
 	rBinErr : REAL;
 	rT1 : REAL;
 	rT2 : REAL;
@@ -211,8 +211,8 @@ VAR CONSTANT
 	// --- 其它常量 ---
 	ALPHA_Q_MIN       : REAL := 0.04;
 	ALPHA_Q_MAX       : REAL := 0.35;
-	ALPHA12_Q_MIN     : REAL := 0.02;
-	ALPHA12_Q_MAX     : REAL := 0.45;
+	ALPHA12_Q_MIN     : REAL := 0.005;   // V4.3 放钳：原 0.02，让升/降子段能进一步收窄
+	ALPHA12_Q_MAX     : REAL := 0.75;    // V4.3 放钳：原 0.45，让顶平 bin 7 能拿到大头时段
 	PLATEAU_BAND_K    : REAL := 0.7;     // 平台判定带：|y - mid| > K * halfRange
 	PLAT_CORR_LR      : REAL := 0.3;     // 平台幅值修正学习率
 	PLAT_CORR_LIMIT_K : REAL := 0.3;     // 平台幅值修正上限：0.3 * halfRange
@@ -717,40 +717,49 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             END_IF
 
             // α 12 段自学习（梯形 nWaveType=3 + 矩形 nWaveType=4）
-            // 组级修正: 当 bin 1(底平)/bin 7(顶平) 被 ALPHA12_Q_MIN 钳死时，
-            // 组级误差(升 1..6 / 降 8..12) 会按 α 比例摊到组内其它 bin，
-            // 让组总占比能继续学习，避免溢出无人接手。
+            // V4.3 改：
+            //  - 升/降段按"组均值"加权（rGroupW），保证整组一起缩短；
+            //    旧版按 α 比例分摊，bin 5/6 等高位升段几乎不动，只缩 bin 2/3；
+            //  - 底平 bin 1 / 顶平 bin 7 单段独立，顶平用 rTopPullW 加倍拉力，
+            //    加快"顶平时段够长"的争取；
+            //  - 配合 ALPHA12_Q_MIN/MAX 放钳（0.005/0.75），让升段总和能进一步压窄
+            //    到 ≈ 5×0.005=2.5%，顶平能拿到 75% 时段。
             IF bAlphaEnable AND (nWaveType = 3 OR nWaveType = 4) THEN
-                // 1. 计算组总占比
-                rRiseTgtSum  := 0.0; rRiseFbSum  := 0.0; rRiseCmdSum  := 0.0;
-                rFallTgtSum  := 0.0; rFallFbSum  := 0.0; rFallCmdSum  := 0.0;
-                FOR iBinK := 1 TO 6 DO
+                // 1. 升/降组总占比（升段=bin 2..6 共 5 段，底平 bin 1 独立）
+                rRiseTgtSum := 0.0; rRiseFbSum := 0.0;
+                rFallTgtSum := 0.0; rFallFbSum := 0.0;
+                FOR iBinK := 2 TO 6 DO
                     rRiseTgtSum := rRiseTgtSum + rAlpha12Tgt[iBinK];
                     rRiseFbSum  := rRiseFbSum  + rAlpha12Fb[iBinK];
-                    rRiseCmdSum := rRiseCmdSum + rAlpha12Cmd[iBinK];
                 END_FOR
                 FOR iBinK := 8 TO 12 DO
                     rFallTgtSum := rFallTgtSum + rAlpha12Tgt[iBinK];
                     rFallFbSum  := rFallFbSum  + rAlpha12Fb[iBinK];
-                    rFallCmdSum := rFallCmdSum + rAlpha12Cmd[iBinK];
                 END_FOR
                 rRiseGroupErr := rRiseTgtSum - rRiseFbSum;
                 rFallGroupErr := rFallTgtSum - rFallFbSum;
+                rRiseMeanErr  := rRiseGroupErr * 0.2;   // /5 升段
+                rFallMeanErr  := rFallGroupErr * 0.2;   // /5 降段
 
-                // 2. 各 bin 更新 = 自身误差 + 所属组的组级误差按 α 比例分摊
+                // 2. 各 bin 更新
                 FOR iBinK := 1 TO 12 DO
                     rBinErr := rAlpha12Tgt[iBinK] - rAlpha12Fb[iBinK];
-                    IF iBinK <= 6 AND rRiseCmdSum > 0.001 THEN
-                        rGroupCorr := rGroupW * rRiseGroupErr
-                                    * (rAlpha12Cmd[iBinK] / rRiseCmdSum);
-                    ELSIF iBinK >= 8 AND rFallCmdSum > 0.001 THEN
-                        rGroupCorr := rGroupW * rFallGroupErr
-                                    * (rAlpha12Cmd[iBinK] / rFallCmdSum);
+                    IF iBinK = 1 THEN
+                        // 底平：单段，per-bin 直接更新
+                        rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK] + rAlphaLR * rBinErr;
+                    ELSIF iBinK <= 6 THEN
+                        // 升段 (2..6)：per-bin + rGroupW × 升段组均值
+                        rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK]
+                                           + rAlphaLR * (rBinErr + rGroupW * rRiseMeanErr);
+                    ELSIF iBinK = 7 THEN
+                        // 顶平：单段，用顶平拉力倍率加权 per-bin
+                        rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK]
+                                           + rAlphaLR * rTopPullW * rBinErr;
                     ELSE
-                        rGroupCorr := 0.0;  // 顶平 bin 7 单段无组可摊
+                        // 降段 (8..12)：per-bin + rGroupW × 降段组均值
+                        rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK]
+                                           + rAlphaLR * (rBinErr + rGroupW * rFallMeanErr);
                     END_IF
-                    rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK]
-                                       + rAlphaLR * (rBinErr + rGroupCorr);
                     IF rAlpha12Cmd[iBinK] < ALPHA12_Q_MIN THEN rAlpha12Cmd[iBinK] := ALPHA12_Q_MIN; END_IF
                     IF rAlpha12Cmd[iBinK] > ALPHA12_Q_MAX THEN rAlpha12Cmd[iBinK] := ALPHA12_Q_MAX; END_IF
                 END_FOR
