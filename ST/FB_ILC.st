@@ -9,11 +9,11 @@ VAR_INPUT
 	bReset          : BOOL;
 	iMaxIterations  : INT;
 	rLearningRate   : REAL := 0.3;   // 端点学习率
-	rAlphaLR        : REAL := 0.2;   // α 学习率（正弦/三角 8 段、梯形/矩形 6 段）
-	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（正弦/三角/梯形/矩形）
-	bPlatCorrEnable : BOOL := TRUE;  // 平台 2 段幅值修正使能（仅梯形/矩形生效）
-	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正，同时完成波形类型检测
-	iWaveTypeIn     : INT  := -1;    // 显式波形类型 (与 FB_WaveformGen 对齐): -1=自动检测, 0=正弦, 1=梯形, 2=水锤波
+	rAlphaLR        : REAL := 0.2;   // α 学习率（正弦 8 段、梯形 12 段）
+	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（正弦/梯形）
+	bPlatCorrEnable : BOOL := TRUE;  // 平台 2 段幅值修正使能（仅梯形生效）
+	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正
+	iWaveTypeIn     : INT  := 0;     // 波形类型 (与 FB_WaveformGen 同编码): 0=正弦 1=梯形 2=水锤波; 其他值按正弦处理
 	rWHPMaxTarget   : REAL := 0.0;   // [水锤] PMax 保压段目标 (MPa); 用于 hold 段幅值修正学习
 	rWHRiseFrac     : REAL := 0.05;  // [水锤] 段 1: 过冲上升段归一化相位宽 (= 上游 FB_WaveformGen 归一化后的 rR)
 	rWHRingFrac     : REAL := 0.07;  // [水锤] 段 2: 过冲衰减段归一化相位宽 (= rRing)
@@ -33,25 +33,19 @@ VAR_OUTPUT
 	// 端点学习量
 	rVMax          : REAL;
 	rVMin          : REAL;
-	rScalePos      : REAL := 1.0;
-	rScaleNeg      : REAL := 1.0;
-	// 8 段 α 时长占比（正弦 / 三角共用）
+	// 8 段 α 时长占比（正弦）
 	rAlphaCmd      : ARRAY [1..8] OF REAL;
 	rAlphaTgt      : ARRAY [1..8] OF REAL;
 	rAlphaFb       : ARRAY [1..8] OF REAL;
-	// 12 段 α 时长占比（梯形 / 矩形共用：底平 / 升 1..5 / 顶平 / 降 1..5）
+	// 12 段 α 时长占比（梯形：底平 / 升 1..5 / 顶平 / 降 1..5）
 	rAlpha12Cmd    : ARRAY [1..12] OF REAL;
 	rAlpha12Tgt    : ARRAY [1..12] OF REAL;
 	rAlpha12Fb     : ARRAY [1..12] OF REAL;
-	// 梯形 / 矩形：平台分 2 段幅值修正（MPa，叠加在 vMin/vMax 上）
+	// 梯形：平台分 2 段幅值修正（MPa，叠加在 vMin/vMax 上）
 	rPlatBotA      : REAL;
 	rPlatBotB      : REAL;
 	rPlatTopA      : REAL;
 	rPlatTopB      : REAL;
-	// 波形检测
-	nWaveType      : INT  := -1;     // 与 FB_WaveformGen 同编码: -1=检测中, 0=正弦, 1=梯形, 2=水锤波
-	rFlatFrac      : REAL;
-	rSymFrac       : REAL;
 	// 水锤波 3 级端点学习 (除 rVMin/rVMax 外, 额外学习过冲峰指令)
 	rVPeak         : REAL;           // 水锤过冲峰指令 (MPa) — 让 actual 抵达 P_OS
 	rWHHoldActual  : REAL;           // 上周期 PMax 保压段 actual 均值 (诊断)
@@ -137,11 +131,8 @@ VAR
 	rNorm            : REAL;
 	rLimit           : REAL;
 	rBinTotal        : REAL;
-	// 波形检测
-	iNearExtCount       : INT;
-	iTargetAboveMidCount: INT;
-	iTotalDetectCount   : INT;
-	bWaveDetected       : BOOL;
+	// 波形类型 (每次调用由 iWaveTypeIn 整定: 非 0/1/2 按正弦处理)
+	nWaveType           : INT;
 	// 水锤波段边界 (新周期缓存; per-sample 与输出阶段共用)
 	rWH_T1              : REAL;       // = rWHRiseFrac
 	rWH_T2              : REAL;       // = T1 + rWHRingFrac
@@ -172,9 +163,6 @@ VAR CONSTANT
 	PLAT_CORR_DECAY   : REAL := 0.9;     // 跳过学习时的修正衰减系数
 	TWO_PI            : REAL := 6.283185307;
 	CYCLES_PER_UPDATE : INT  := 2;
-	FLAT_THR_TRI      : REAL := 0.15;
-	FLAT_THR_SIN      : REAL := 0.40;
-	FLAT_THR_TRAP     : REAL := 0.70;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
 	ENV_INNER_RATIO   : REAL := 0.8;     // 包络门控内缩比例: 用 80% 内包络作为学习门限, 防止 100% 边界震荡
 END_VAR
@@ -199,18 +187,9 @@ IF bReset OR NOT bEnable THEN
         rPrevTargetRange  := 0.0;
         rVMax             := 0.0;
         rVMin             := 0.0;
-        rScalePos         := 1.0;
-        rScaleNeg         := 1.0;
         bVInitialized     := FALSE;
         rActualPrev       := 0.0;
         rTargetPrev       := 0.0;
-        nWaveType              := -1;
-        rFlatFrac              := 0.0;
-        rSymFrac               := 0.0;
-        iNearExtCount          := 0;
-        iTargetAboveMidCount   := 0;
-        iTotalDetectCount      := 0;
-        bWaveDetected          := FALSE;
         // 8 段 α 默认均分
         FOR iBinK := 1 TO 8 DO
             rAlphaCmd[iBinK] := 0.125;
@@ -271,18 +250,12 @@ IF iPointsPerCycle < 10 THEN
 END_IF
 
 // ============================================================
-// 显式波形类型映射 (优先于自动检测)
-//   nWaveType 与 FB_WaveformGen 的 iWaveType 同编码:
-//     0 = 正弦       (Fig.3)
-//     1 = 梯形       (Fig.1)
-//     2 = 水锤波     (Fig.2)
-//    -1 = 检测中     (仅当 iWaveTypeIn = -1 时使用自动检测)
-//   水锤波必须由 iWaveTypeIn = 2 显式指定 (自动检测无法判别过冲)
+// 波形类型整定 (与 FB_WaveformGen 的 iWaveType 同编码)
+//   0 = 正弦 (Fig.3) / 1 = 梯形 (Fig.1) / 2 = 水锤波 (Fig.2)
+//   其他值与 FB_WaveformGen 的 ELSE 分支保持一致, 按正弦处理
 // ============================================================
-IF iWaveTypeIn = 0 OR iWaveTypeIn = 1 OR iWaveTypeIn = 2 THEN
-    IF nWaveType <> iWaveTypeIn THEN nWaveType := iWaveTypeIn; END_IF
-    bWaveDetected := TRUE;
-END_IF
+nWaveType := iWaveTypeIn;
+IF nWaveType < 0 OR nWaveType > 2 THEN nWaveType := 0; END_IF
 
 // ============================================================
 // 新周期边界
@@ -378,19 +351,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     iIteration := iIterCount;
 
     IF iIterCount <= nWarmupCycles THEN
-        // 暖机末完成波形类型检测
-        IF iIterCount = nWarmupCycles AND NOT bWaveDetected AND iTotalDetectCount > 20 THEN
-            rFlatFrac := INT_TO_REAL(iNearExtCount)        / INT_TO_REAL(iTotalDetectCount);
-            rSymFrac  := INT_TO_REAL(iTargetAboveMidCount) / INT_TO_REAL(iTotalDetectCount);
-            // 自动检测仅在 sine / trapezoid 间区分 (水锤需 iWaveTypeIn=2 显式指定)
-            // 平台占比大 → 梯形 (含旧矩形); 否则 → 正弦 (含旧三角/任意波)
-            IF rFlatFrac > FLAT_THR_SIN THEN
-                nWaveType := 1;       // 梯形
-            ELSE
-                nWaveType := 0;       // 正弦
-            END_IF
-            bWaveDetected := TRUE;
-        END_IF
         nUpdateCount  := 0;
         rPeakErrSum   := 0.0;
         rValleyErrSum := 0.0;
@@ -556,13 +516,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         END_IF
     END_IF
 
-    // 诊断派生量 rScalePos / rScaleNeg
-    IF rHalfRange > 0.001 AND bVInitialized THEN
-        rScalePos := (rVMax - rMidpoint) / rHalfRange;
-        rScaleNeg := (rMidpoint - rVMin) / rHalfRange;
-    END_IF
-
-    // 缓存梯形/矩形平台 phase 边界（per-sample 与输出阶段共用）
+    // 缓存梯形平台 phase 边界（per-sample 与输出阶段共用）
     IF nWaveType = 1 THEN
         rT1Cached    := rAlpha12Cmd[1];
         rT6Cached    := rT1Cached + rAlpha12Cmd[2] + rAlpha12Cmd[3]
@@ -624,24 +578,13 @@ IF rActual    < rActualMin THEN rActualMin := rActual;    END_IF
 rErrorSum2  := rErrorSum2 + (rTargetRaw - rActual) * (rTargetRaw - rActual);
 iErrorCount := iErrorCount + 1;
 
-// 波形类型检测
-IF NOT bWaveDetected AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
-    iTotalDetectCount := iTotalDetectCount + 1;
-    IF ABS(rTargetRaw - rMidpoint) > 0.9 * rHalfRange THEN
-        iNearExtCount := iNearExtCount + 1;
-    END_IF
-    IF rTargetRaw >= rMidpoint THEN
-        iTargetAboveMidCount := iTargetAboveMidCount + 1;
-    END_IF
-END_IF
-
 // 方向检测
 IF rTargetRaw >= rTargetPrev THEN bTgtRising := TRUE; ELSE bTgtRising := FALSE; END_IF
 rTargetPrev := rTargetRaw;
 IF rActual   >= rActualPrev THEN bFbRising  := TRUE; ELSE bFbRising  := FALSE; END_IF
 rActualPrev := rActual;
 
-// --------- 8 段分箱（正弦 + 三角共用）---------
+// --------- 8 段分箱（正弦）---------
 IF (nWaveType = 0) AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
     iBinTotal := iBinTotal + 1;
     rTgtPos := rTargetRaw - rMidpoint;
@@ -677,7 +620,7 @@ IF (nWaveType = 0) AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
     iFbBin[iBinK] := iFbBin[iBinK] + 1;
 END_IF
 
-// --------- 12 段分箱（梯形 + 矩形共用）---------
+// --------- 12 段分箱（梯形）---------
 // 1=底平; 2..6=升 5 子段（自下而上）; 7=顶平; 8..12=降 5 子段（自上而下）
 // 斜坡振幅区间 [-PLATEAU_BAND_K, +PLATEAU_BAND_K]·hR 五等分
 IF (nWaveType = 1) AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
@@ -792,8 +735,9 @@ IF NOT bVInitialized THEN
 END_IF
 
 // 源波形 rSourceTarget：
-//   正弦(1) / 三角(2) → α 8 段相位重映射后再按各自基波形重建
-//   其他波形         → 直通 rTargetRaw
+//   正弦(0) → α 8 段相位重映射后重建
+//   水锤(2) → 5 段直接重构并提前返回
+//   梯形(1) → α 12 段相位重映射 + 梯形模板
 IF nWaveType = 0 THEN
     rT1 := rAlphaCmd[1];
     rT2 := rT1 + rAlphaCmd[2];
@@ -860,7 +804,7 @@ ELSIF nWaveType = 2 THEN
     RETURN;
 
 ELSIF nWaveType = 1 THEN
-    // 梯形 / 矩形：12 段相位重映射 + 梯形模板
+    // 梯形：12 段相位重映射 + 梯形模板
     // 模板（标准振幅 0..1）：
     //   底平(0) → 升 0→0.2→0.4→0.6→0.8→1 → 顶平(1) → 降 1→0.8→0.6→0.4→0.2→0
     rT1  := rAlpha12Cmd[1];
@@ -930,7 +874,7 @@ END_IF
 rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
 
-// 梯形/矩形平台 2 段幅值修正：按 cmd phase 落在哪个子段叠加对应 MPa 偏置
+// 梯形平台 2 段幅值修正：按 cmd phase 落在哪个子段叠加对应 MPa 偏置
 IF bPlatCorrEnable AND (nWaveType = 1) THEN
     IF rPhi < rT1Cached THEN
         IF rPhi < rBotMidPhase THEN
