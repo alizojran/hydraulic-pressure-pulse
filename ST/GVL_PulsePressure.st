@@ -57,7 +57,7 @@ VAR_GLOBAL
 	PP_Oil_TargetUpper : REAL; // 油路 ARP1383C 上包络 (MPa) — 实际压力允许上限
 	PP_Oil_TargetLower : REAL; // 油路 ARP1383C 下包络 (MPa) — 实际压力允许下限
 	PP_Oil_EnvPctP : REAL; // ARP1383C 包络压力容差 ×PMax (默认 0.05 = 5%)
-	PP_Oil_EnvPctT : REAL; // ARP1383C 包络时间容差 ×周期 (默认 0.10 = 10%)
+	PP_Oil_EnvPctT : REAL; // (已废弃) 原包络时间容差; 时间容差功能已取消, 不参与计算, 仅保留 TCP 地址兼容
 	PP_Oil_ILC_Output : REAL; // 油路 ILC 指令修正量(MPa) — 加到 rTarget 上做虚拟目标
 	PP_Oil_ILC_Iteration : REAL; // 油路ILC当前迭代次数
 	PP_Oil_PID_Output : REAL; // 油路 PID 反馈输出(V)

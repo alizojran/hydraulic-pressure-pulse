@@ -207,8 +207,7 @@ CASE iState OF
         rDt           := rDt,
         bReset        := FALSE,
         nMffLeadSteps := 0,    // 已移除 MFF, 不再需要超前相位
-        rEnvPctP      := GVL_PulsePressure.PP_Oil_EnvPctP,
-        rEnvPctT      := GVL_PulsePressure.PP_Oil_EnvPctT
+        rEnvPctP      := GVL_PulsePressure.PP_Oil_EnvPctP
     );
 
     GVL_PulsePressure.PP_Oil_SetpointPressure := fbWaveGen_O.rTarget;

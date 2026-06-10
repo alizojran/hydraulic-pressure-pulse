@@ -15,7 +15,6 @@ VAR_INPUT
 	bReset : BOOL; // 复位相位
 	nMffLeadSteps : INT; // MFF超前步数: 提前N步计算目标值给MFF使用
 	rEnvPctP : REAL := 0.05; // ARP1383C 包络压力容差 ×PMax，默认 5%
-	rEnvPctT : REAL := 0.10; // ARP1383C 包络时间容差 ×周期，默认 10%
 END_VAR
 VAR_OUTPUT
 	rTarget : REAL; // 当前目标压力 (MPa)
@@ -51,13 +50,7 @@ VAR
 	rSum : REAL; // 水锤波 5 段占比和 (用于归一化)
 	rPeakOS : REAL; // 水锤波过冲峰压力 = Pmax + rOS*(Pmax-Pmin)
 	rPhaseLead : REAL; // 超前相位
-	rPhaseEarly : REAL; // 包络采样：早相位 (φ + Δt)
-	rPhaseLate : REAL; // 包络采样：晚相位 (φ - Δt)
-	rTargetEarly : REAL; // 早相位目标
-	rTargetLate : REAL; // 晚相位目标
 	rEnvDP : REAL; // 包络压力半带宽 (MPa)
-	rEnvMax : REAL; // 三相位采样最大值
-	rEnvMin : REAL; // 三相位采样最小值
 END_VAR
 
 
@@ -199,49 +192,18 @@ END_IF
 
 
 // ============================================================
-// ARP1383C 误差包络 (三相位采样 + 压力容差带)
+// ARP1383C 误差包络 (纯压力容差贴身带)
 //
-// 包络生成原理:
-//   设当前相位 φ，时间容差 Δt = rEnvPctT × 周期 (归一化即 rEnvPctT)
-//   在 φ-Δt, φ, φ+Δt 三个相位采样目标值，取 max/min:
-//     P_upper(φ) = max{P_nom(φ'), φ' ∈ {φ-Δt, φ, φ+Δt}} + ΔP
-//     P_lower(φ) = min{P_nom(φ'), φ' ∈ {φ-Δt, φ, φ+Δt}} - ΔP
-//   其中压力容差 ΔP = rEnvPctP × PMax
+//   P_upper(φ) = P_nom(φ) + ΔP
+//   P_lower(φ) = P_nom(φ) - ΔP，其中 ΔP = rEnvPctP × PMax (默认 5%)
 //
-//   这样:
-//     正弦波 — 三点采样近似相等，包络 ≈ 主波形 ± ΔP
-//     梯形波 — 上升/下降沿处三点跨越平台，包络自动张开 (上沿提前+晚段)
-//     水锤波 — 过冲峰区采样到 P_OS，包络上沿包住尖峰
-//
-// ARP1383C 默认: ΔP = 5%·PMax, Δt = 10% 周期
+// 注: 已取消时间容差功能 (原 φ±Δt 三相位采样)，包络在任意相位
+// 都是标称波形上下各 ΔP 的等宽带。
 // ============================================================
 rEnvDP := rEnvPctP * rPMax;
 
-// 三相位的早相 / 晚相，循环回卷到 [0, 1)
-rPhaseEarly := rPhase + rEnvPctT;
-IF rPhaseEarly >= 1.0 THEN rPhaseEarly := rPhaseEarly - 1.0; END_IF
-rPhaseLate := rPhase - rEnvPctT;
-IF rPhaseLate < 0.0 THEN rPhaseLate := rPhaseLate + 1.0; END_IF
-
-rTargetEarly := FN_PulseWave(
-    rPhaseIn := rPhaseEarly,
-    rPMin := rPMin, rPMax := rPMax, iWaveType := iWaveType,
-    rR := rR, rH := rH, rF := rF, rRing := rRing, rPeakOS := rPeakOS);
-rTargetLate := FN_PulseWave(
-    rPhaseIn := rPhaseLate,
-    rPMin := rPMin, rPMax := rPMax, iWaveType := iWaveType,
-    rR := rR, rH := rH, rF := rF, rRing := rRing, rPeakOS := rPeakOS);
-
-// max / min over the three samples
-rEnvMax := rTarget;
-IF rTargetEarly > rEnvMax THEN rEnvMax := rTargetEarly; END_IF
-IF rTargetLate > rEnvMax THEN rEnvMax := rTargetLate; END_IF
-rEnvMin := rTarget;
-IF rTargetEarly < rEnvMin THEN rEnvMin := rTargetEarly; END_IF
-IF rTargetLate < rEnvMin THEN rEnvMin := rTargetLate; END_IF
-
-rTargetUpper := rEnvMax + rEnvDP;
-rTargetLower := rEnvMin - rEnvDP;
+rTargetUpper := rTarget + rEnvDP;
+rTargetLower := rTarget - rEnvDP;
 IF rTargetLower < 0.0 THEN rTargetLower := 0.0; END_IF
 IF rTargetUpper > 50.0 THEN rTargetUpper := 50.0; END_IF
 

@@ -2,7 +2,6 @@ FUNCTION FN_PulseWave : REAL
 // 根据相位计算单点目标压力。被 FB_WaveformGen 在多处复用：
 //   - 主波形 (当前相位)
 //   - MFF 超前 (φ + lead·Δφ)
-//   - 误差包络 (φ ± rEnvPctT)
 // 段宽参数 rR/rH/rF/rRing/rPeakOS 在调用前已由调用方归一化并保护过。
 VAR_INPUT
 	rPhaseIn : REAL; // 相位 (0~1)

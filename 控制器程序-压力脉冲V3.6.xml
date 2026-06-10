@@ -1518,7 +1518,7 @@ j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_EnvPctT);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 188-189: 包络时间容差 (回读)
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 188-189: (已废弃) 原包络时间容差 (回读, 地址保留)
 j := j + 2;
 
 // -- 镜像 PC→PLC [D] 控制器 (6 字段) --
@@ -1712,14 +1712,6 @@ j := j + 2;
                       <simpleValue value="0.05" />
                     </initialValue>
                   </variable>
-                  <variable name="rEnvPctT">
-                    <type>
-                      <REAL />
-                    </type>
-                    <initialValue>
-                      <simpleValue value="0.10" />
-                    </initialValue>
-                  </variable>
                 </inputVars>
                 <outputVars>
                   <variable name="rTarget">
@@ -1877,37 +1869,7 @@ j := j + 2;
                       <REAL />
                     </type>
                   </variable>
-                  <variable name="rPhaseEarly">
-                    <type>
-                      <REAL />
-                    </type>
-                  </variable>
-                  <variable name="rPhaseLate">
-                    <type>
-                      <REAL />
-                    </type>
-                  </variable>
-                  <variable name="rTargetEarly">
-                    <type>
-                      <REAL />
-                    </type>
-                  </variable>
-                  <variable name="rTargetLate">
-                    <type>
-                      <REAL />
-                    </type>
-                  </variable>
                   <variable name="rEnvDP">
-                    <type>
-                      <REAL />
-                    </type>
-                  </variable>
-                  <variable name="rEnvMax">
-                    <type>
-                      <REAL />
-                    </type>
-                  </variable>
-                  <variable name="rEnvMin">
                     <type>
                       <REAL />
                     </type>
@@ -2054,49 +2016,18 @@ END_IF
 
 
 // ============================================================
-// ARP1383C 误差包络 (三相位采样 + 压力容差带)
+// ARP1383C 误差包络 (纯压力容差贴身带)
 //
-// 包络生成原理:
-//   设当前相位 φ，时间容差 Δt = rEnvPctT × 周期 (归一化即 rEnvPctT)
-//   在 φ-Δt, φ, φ+Δt 三个相位采样目标值，取 max/min:
-//     P_upper(φ) = max{P_nom(φ'), φ' ∈ {φ-Δt, φ, φ+Δt}} + ΔP
-//     P_lower(φ) = min{P_nom(φ'), φ' ∈ {φ-Δt, φ, φ+Δt}} - ΔP
-//   其中压力容差 ΔP = rEnvPctP × PMax
+//   P_upper(φ) = P_nom(φ) + ΔP
+//   P_lower(φ) = P_nom(φ) - ΔP，其中 ΔP = rEnvPctP × PMax (默认 5%)
 //
-//   这样:
-//     正弦波 — 三点采样近似相等，包络 ≈ 主波形 ± ΔP
-//     梯形波 — 上升/下降沿处三点跨越平台，包络自动张开 (上沿提前+晚段)
-//     水锤波 — 过冲峰区采样到 P_OS，包络上沿包住尖峰
-//
-// ARP1383C 默认: ΔP = 5%·PMax, Δt = 10% 周期
+// 注: 已取消时间容差功能 (原 φ±Δt 三相位采样)，包络在任意相位
+// 都是标称波形上下各 ΔP 的等宽带。
 // ============================================================
 rEnvDP := rEnvPctP * rPMax;
 
-// 三相位的早相 / 晚相，循环回卷到 [0, 1)
-rPhaseEarly := rPhase + rEnvPctT;
-IF rPhaseEarly &gt;= 1.0 THEN rPhaseEarly := rPhaseEarly - 1.0; END_IF
-rPhaseLate := rPhase - rEnvPctT;
-IF rPhaseLate &lt; 0.0 THEN rPhaseLate := rPhaseLate + 1.0; END_IF
-
-rTargetEarly := FN_PulseWave(
-    rPhaseIn := rPhaseEarly,
-    rPMin := rPMin, rPMax := rPMax, iWaveType := iWaveType,
-    rR := rR, rH := rH, rF := rF, rRing := rRing, rPeakOS := rPeakOS);
-rTargetLate := FN_PulseWave(
-    rPhaseIn := rPhaseLate,
-    rPMin := rPMin, rPMax := rPMax, iWaveType := iWaveType,
-    rR := rR, rH := rH, rF := rF, rRing := rRing, rPeakOS := rPeakOS);
-
-// max / min over the three samples
-rEnvMax := rTarget;
-IF rTargetEarly &gt; rEnvMax THEN rEnvMax := rTargetEarly; END_IF
-IF rTargetLate &gt; rEnvMax THEN rEnvMax := rTargetLate; END_IF
-rEnvMin := rTarget;
-IF rTargetEarly &lt; rEnvMin THEN rEnvMin := rTargetEarly; END_IF
-IF rTargetLate &lt; rEnvMin THEN rEnvMin := rTargetLate; END_IF
-
-rTargetUpper := rEnvMax + rEnvDP;
-rTargetLower := rEnvMin - rEnvDP;
+rTargetUpper := rTarget + rEnvDP;
+rTargetLower := rTarget - rEnvDP;
 IF rTargetLower &lt; 0.0 THEN rTargetLower := 0.0; END_IF
 IF rTargetUpper &gt; 50.0 THEN rTargetUpper := 50.0; END_IF
 
@@ -2862,8 +2793,7 @@ CASE iState OF
         rDt           := rDt,
         bReset        := FALSE,
         nMffLeadSteps := 0,    // 已移除 MFF, 不再需要超前相位
-        rEnvPctP      := GVL_PulsePressure.PP_Oil_EnvPctP,
-        rEnvPctT      := GVL_PulsePressure.PP_Oil_EnvPctT
+        rEnvPctP      := GVL_PulsePressure.PP_Oil_EnvPctP
     );
 
     GVL_PulsePressure.PP_Oil_SetpointPressure := fbWaveGen_O.rTarget;
@@ -3184,7 +3114,7 @@ GVL_PulsePressure.PP_Oil_EnvPctP := TwoWord_to_Float.Output;            // 74-75
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_EnvPctT := TwoWord_to_Float.Output;            // 76-77: ARP1383C 包络时间容差 ×周期 (默认 0.10)
+GVL_PulsePressure.PP_Oil_EnvPctT := TwoWord_to_Float.Output;            // 76-77: (已废弃) 原包络时间容差, 不参与计算, 地址保留
 i := i + 2;
 
 // 78-95: 保留 (9 字段)
@@ -5229,7 +5159,6 @@ rErrorPrev := rError;</xhtml>
                   <xhtml xmlns="http://www.w3.org/1999/xhtml">// 根据相位计算单点目标压力。被 FB_WaveformGen 在多处复用：
 //   - 主波形 (当前相位)
 //   - MFF 超前 (φ + lead·Δφ)
-//   - 误差包络 (φ ± rEnvPctT)
 // 段宽参数 rR/rH/rF/rRing/rPeakOS 在调用前已由调用方归一化并保护过。
 
 

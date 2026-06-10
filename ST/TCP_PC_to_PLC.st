@@ -128,7 +128,7 @@ GVL_PulsePressure.PP_Oil_EnvPctP := TwoWord_to_Float.Output;            // 74-75
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_EnvPctT := TwoWord_to_Float.Output;            // 76-77: ARP1383C 包络时间容差 ×周期 (默认 0.10)
+GVL_PulsePressure.PP_Oil_EnvPctT := TwoWord_to_Float.Output;            // 76-77: (已废弃) 原包络时间容差, 不参与计算, 地址保留
 i := i + 2;
 
 // 78-95: 保留 (9 字段)
