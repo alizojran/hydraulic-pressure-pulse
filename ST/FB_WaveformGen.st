@@ -8,7 +8,7 @@ VAR_INPUT
 	rRisePct : REAL; // 梯形/水锤波上升段占比，默认0.1
 	rHoldPct : REAL; // 梯形/水锤波保持段占比，默认0.3
 	rFallPct : REAL; // 梯形/水锤波下降段占比，默认0.1
-	rOvershoot : REAL; // 水锤波过冲幅值占比 = (Pos-Pmax)/(Pmax-Pmin)，默认0.10
+	rOvershoot : REAL; // 水锤波过冲峰倍数: P_OS = rOvershoot×PMax (rPMax 即 P_Oper); 写 <1 视为无效, 按 ARP1383C 3.1 取 1.5
 	rRingPct : REAL; // 水锤波过冲后稳定段占比 (指令直接给PMax)，默认0.07
 	rLowDwellPct : REAL; // 水锤波低保持段占比，默认0.48 (5段相对权重，内部归一化)
 	rDt : REAL; // 控制周期 (s)
@@ -46,9 +46,9 @@ VAR
 	rL : REAL; // 梯形低保持段占比
 	rRing : REAL; // 水锤波过冲后稳定段占比 (归一化后)
 	rLow : REAL; // 水锤波低保持段占比 (归一化后)
-	rOS : REAL; // 水锤波过冲幅值占比 (保护后)
+	rOS : REAL; // 水锤波过冲峰倍数 (保护后)
 	rSum : REAL; // 水锤波 5 段占比和 (用于归一化)
-	rPeakOS : REAL; // 水锤波过冲峰压力 = Pmax + rOS*(Pmax-Pmin)
+	rPeakOS : REAL; // 水锤波过冲峰压力 = rOS×PMax (标准: 1.5×P_Oper)
 	rPhaseLead : REAL; // 超前相位
 	rEnvDP : REAL; // 正弦包络压力半带宽 (MPa)
 	rET1 : REAL; // 包络段边界 1 (累积相位)
@@ -163,9 +163,11 @@ CASE iWaveType OF
         rF := rF / rSum;
         rLow := rLow / rSum;
     END_IF
+    // ARP1383C 3.1: 过冲峰 P_OS = 1.5×P_Oper (rPMax 即 P_Oper);
+    // 倍数可调 (如回油腔 PR_Max = 1.5×PR 亦为 1.5), 写 <1 无效按 1.5
     rOS := rOvershoot;
-    IF rOS <= 0.0 THEN rOS := 0.10; END_IF
-    rPeakOS := rPMax + rOS * (rPMax - rPMin);
+    IF rOS < 1.0 THEN rOS := 1.5; END_IF
+    rPeakOS := rOS * rPMax;
 
 ELSE
     // 正弦无段：把变量清成无害默认值

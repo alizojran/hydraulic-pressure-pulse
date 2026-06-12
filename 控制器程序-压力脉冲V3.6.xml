@@ -1493,7 +1493,7 @@ j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_Overshoot);
 INPUT_REGISTER[j]   := Float_to_TwoWord.Word_LOW;
-INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 178-179: 过冲幅值占比 (回读)
+INPUT_REGISTER[j+1] := Float_to_TwoWord.Word_HIGH;         // 178-179: 过冲峰倍数 (回读)
 j := j + 2;
 
 Float_to_TwoWord(input := GVL_PulsePressure.PP_Oil_RingPct);
@@ -2091,9 +2091,11 @@ CASE iWaveType OF
         rF := rF / rSum;
         rLow := rLow / rSum;
     END_IF
+    // ARP1383C 3.1: 过冲峰 P_OS = 1.5×P_Oper (rPMax 即 P_Oper);
+    // 倍数可调 (如回油腔 PR_Max = 1.5×PR 亦为 1.5), 写 &lt;1 无效按 1.5
     rOS := rOvershoot;
-    IF rOS &lt;= 0.0 THEN rOS := 0.10; END_IF
-    rPeakOS := rPMax + rOS * (rPMax - rPMin);
+    IF rOS &lt; 1.0 THEN rOS := 1.5; END_IF
+    rPeakOS := rOS * rPMax;
 
 ELSE
     // 正弦无段：把变量清成无害默认值
@@ -3327,7 +3329,7 @@ GVL_PulsePressure.PP_Oil_FallPct := TwoWord_to_Float.Output;            // 64-65
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_Overshoot := TwoWord_to_Float.Output;          // 66-67: 水锤波过冲幅值占比
+GVL_PulsePressure.PP_Oil_Overshoot := TwoWord_to_Float.Output;          // 66-67: 水锤波过冲峰倍数 (×P_Oper, 标准1.5; 写&lt;1按1.5)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);

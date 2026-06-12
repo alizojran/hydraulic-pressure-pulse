@@ -108,7 +108,7 @@ GVL_PulsePressure.PP_Oil_FallPct := TwoWord_to_Float.Output;            // 64-65
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_Overshoot := TwoWord_to_Float.Output;          // 66-67: 水锤波过冲幅值占比
+GVL_PulsePressure.PP_Oil_Overshoot := TwoWord_to_Float.Output;          // 66-67: 水锤波过冲峰倍数 (×P_Oper, 标准1.5; 写<1按1.5)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
