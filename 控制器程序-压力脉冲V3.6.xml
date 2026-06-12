@@ -4885,21 +4885,13 @@ ELSIF nWaveType = 2 THEN
     //   段 1: rVPeak                       (过冲峰)
     //   段 2: rVMax                        (ring 衰减后立即落到 PMax)
     //   段 3: rVMax                        (PMax 保压)
-    //   段 4: 线性 rVMax → rVMin           (下降)
-    //   段 5: rVMin                        (PMin 低保持)
+    //   段 4+5: rVMin                      (阶跃下降: 指令直落无斜率 + PMin 低保持)
     IF rPhi &lt; rWH_T1 THEN
         rVirtualTarget := rVPeak;
     ELSIF rPhi &lt; rWH_T2 THEN
         rVirtualTarget := rVMax;
     ELSIF rPhi &lt; rWH_T3 THEN
         rVirtualTarget := rVMax;
-    ELSIF rPhi &lt; rWH_T4 THEN
-        rDelta := rWH_T4 - rWH_T3;
-        IF rDelta &gt; 0.001 THEN
-            rVirtualTarget := rVMax - (rPhi - rWH_T3) / rDelta * (rVMax - rVMin);
-        ELSE
-            rVirtualTarget := (rVMax + rVMin) / 2.0;
-        END_IF
     ELSE
         rVirtualTarget := rVMin;
     END_IF
@@ -5297,15 +5289,15 @@ CASE iWaveType OF
         FN_PulseWave := rPMin;
     END_IF
 
-2:  // ARP1383C 水锤波 (五段：过冲峰 / 过冲后稳定 / 保压 / 下降 / 低保持)
+2:  // ARP1383C 水锤波 (过冲峰 / 过冲后稳定 / 保压 / 阶跃下降+低保持)
+    // 下降指令为阶跃直落 PMin (无斜率, Fig.2 典型波形垂直跌落);
+    // rF 不参与指令, 仅作包络的 5%C 自由下降窗宽, 泄压靠系统自然响应
     IF rPhaseIn &lt; rR THEN
         FN_PulseWave := rPeakOS;
     ELSIF rPhaseIn &lt; (rR + rRing) THEN
         FN_PulseWave := rPMax;
     ELSIF rPhaseIn &lt; (rR + rRing + rH) THEN
         FN_PulseWave := rPMax;
-    ELSIF rPhaseIn &lt; (rR + rRing + rH + rF) THEN
-        FN_PulseWave := rPMax - (rPMax - rPMin) * ((rPhaseIn - rR - rRing - rH) / rF);
     ELSE
         FN_PulseWave := rPMin;
     END_IF

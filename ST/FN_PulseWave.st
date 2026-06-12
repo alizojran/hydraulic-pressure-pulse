@@ -36,15 +36,15 @@ CASE iWaveType OF
         FN_PulseWave := rPMin;
     END_IF
 
-2:  // ARP1383C 水锤波 (五段：过冲峰 / 过冲后稳定 / 保压 / 下降 / 低保持)
+2:  // ARP1383C 水锤波 (过冲峰 / 过冲后稳定 / 保压 / 阶跃下降+低保持)
+    // 下降指令为阶跃直落 PMin (无斜率, Fig.2 典型波形垂直跌落);
+    // rF 不参与指令, 仅作包络的 5%C 自由下降窗宽, 泄压靠系统自然响应
     IF rPhaseIn < rR THEN
         FN_PulseWave := rPeakOS;
     ELSIF rPhaseIn < (rR + rRing) THEN
         FN_PulseWave := rPMax;
     ELSIF rPhaseIn < (rR + rRing + rH) THEN
         FN_PulseWave := rPMax;
-    ELSIF rPhaseIn < (rR + rRing + rH + rF) THEN
-        FN_PulseWave := rPMax - (rPMax - rPMin) * ((rPhaseIn - rR - rRing - rH) / rF);
     ELSE
         FN_PulseWave := rPMin;
     END_IF

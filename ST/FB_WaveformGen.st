@@ -7,7 +7,7 @@ VAR_INPUT
 	iWaveType : INT; // 波形类型 0=正弦 1=梯形 2=ARP1383水锤波
 	rRisePct : REAL; // 梯形/水锤波上升段占比，默认0.1
 	rHoldPct : REAL; // 梯形/水锤波保持段占比，默认0.3
-	rFallPct : REAL; // 梯形/水锤波下降段占比，默认0.1
+	rFallPct : REAL; // 梯形下降段占比(默认0.1); 水锤波=阶跃下降的包络自由窗宽(指令无斜率, 默认0.05)
 	rOvershoot : REAL; // 水锤波过冲峰倍数: P_OS = rOvershoot×PMax (rPMax 即 P_Oper); 写 <1 视为无效, 按 ARP1383C 3.1 取 1.5
 	rRingPct : REAL; // 水锤波过冲后稳定段占比 (指令直接给PMax)，默认0.07
 	rLowDwellPct : REAL; // 水锤波低保持段占比，默认0.48 (5段相对权重，内部归一化)

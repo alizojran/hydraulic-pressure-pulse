@@ -781,21 +781,13 @@ ELSIF nWaveType = 2 THEN
     //   段 1: rVPeak                       (过冲峰)
     //   段 2: rVMax                        (ring 衰减后立即落到 PMax)
     //   段 3: rVMax                        (PMax 保压)
-    //   段 4: 线性 rVMax → rVMin           (下降)
-    //   段 5: rVMin                        (PMin 低保持)
+    //   段 4+5: rVMin                      (阶跃下降: 指令直落无斜率 + PMin 低保持)
     IF rPhi < rWH_T1 THEN
         rVirtualTarget := rVPeak;
     ELSIF rPhi < rWH_T2 THEN
         rVirtualTarget := rVMax;
     ELSIF rPhi < rWH_T3 THEN
         rVirtualTarget := rVMax;
-    ELSIF rPhi < rWH_T4 THEN
-        rDelta := rWH_T4 - rWH_T3;
-        IF rDelta > 0.001 THEN
-            rVirtualTarget := rVMax - (rPhi - rWH_T3) / rDelta * (rVMax - rVMin);
-        ELSE
-            rVirtualTarget := (rVMax + rVMin) / 2.0;
-        END_IF
     ELSE
         rVirtualTarget := rVMin;
     END_IF
