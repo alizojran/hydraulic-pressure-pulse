@@ -1899,7 +1899,7 @@ j := j + 2;
                       <REAL />
                     </type>
                   </variable>
-                  <variable name="rPhiSh">
+                  <variable name="rEnvRng">
                     <type>
                       <REAL />
                     </type>
@@ -2138,17 +2138,18 @@ END_IF
 // ============================================================
 // ARP1383C 容差包络 — 按标准 Fig.1 / Fig.2 / Fig.3 分波形生成
 //
-// 正弦  (Fig.3): 标称 ±ΔP (默认 2%·PMax); 峰/谷允许 0.1C 驻留,
-//               PMean 处允许 0.1C 时间畸变 → 实现为 ±0.05C 时移包络:
-//               上包络取向峰时移、下包络取向谷时移的标称值 ±ΔP
+// 正弦  (Fig.3): 直线走廊 (与标准图一致): 三角近似 ±0.05C 时移
+//               ±ΔP (默认 2%·PMax)。上包络仅峰区平顶 0.1C (最大
+//               驻留)、谷处 V 形; 下包络仅谷区平底 0.1C、峰处 Λ 形;
+//               PMean 处水平带宽 ≈ 0.1C (最大畸变)
 // 梯形  (Fig.1): 保压带 [0.96, 1.04]·PMax; 低压段上限 1.1·PMin
 //               (不低于 0.345 MPa); 升沿: 上包络提前 ENV_SLACK 到顶/
 //               下包络滞后 ENV_SLACK 到 0.96; 降沿: 下包络立即落 0,
 //               上包络自下降结束后缓降至周期末 (允许实际压力长拖尾)
-// 水锤  (Fig.2): 过冲峰段 ±4%·P_OS; ring 段上包络线性收至 1.1·PMax,
-//               下限 0.8·PMax; 保压带上限 1.1·PMax / 下限 0.8→0.95
-//               线性收紧; 下降段 (标准为 5%C 窗口) 上包络保持到段尾;
-//               低压段上限 1.1·PMin
+// 水锤  (Fig.2): 过冲峰+ring 段 (标准 0~15%C) 为全幅自由窗: 上包络
+//               平直 1.04·P_OS (峰容差 ±4%)、下包络 0; 保压段上限
+//               1.1·PMax / 下限 0.8→0.95·PMax 线性收紧; 下降段
+//               (标准 5%C 窗口) 上包络保持到段尾; 低压段上限 1.1·PMin
 // 注: Fig.1 标注的保压带驻留 10%~37% 周期为参数约束 (设 rHoldPct
 //     时遵守), 不在包络内强制; 高 PMin 工况按标准 NOTE 可收紧为
 //     [0.9, 1.1]·PMin, 当前未实现。
@@ -2192,24 +2193,21 @@ CASE iWaveType OF
     rET3 := rR + rRing + rH;         // 保压结束 / 下降开始
     rET4 := rR + rRing + rH + rF;    // 下降结束
 
-    // 上包络: 峰段 1.04·P_OS → ring 线性收至 1.1·PMax → 保压/下降平 1.1·PMax → 低压 1.1·PMin
-    IF rPhase &lt; rET1 THEN
+    // 上包络: 峰+ring 整窗平直 1.04·P_OS (标准 0~15%C 全幅自由窗)
+    //         → 保压/下降 1.1·PMax (上包络保持到下降段尾 = 标准 5%C 窗口)
+    //         → 低压 1.1·PMin
+    IF rPhase &lt; rET2 THEN
         rTargetUpper := (1.0 + ENV_WH_PKTOL) * rPeakOS;
-    ELSIF rPhase &lt; rET2 THEN
-        rTargetUpper := (1.0 + ENV_WH_PKTOL) * rPeakOS
-                      + (ENV_WH_UP * rPMax - (1.0 + ENV_WH_PKTOL) * rPeakOS)
-                        * (rPhase - rET1) / (rET2 - rET1);
     ELSIF rPhase &lt; rET4 THEN
         rTargetUpper := ENV_WH_UP * rPMax;
     ELSE
         rTargetUpper := rBaseUp;
     END_IF
 
-    // 下包络: 峰段 0 (上升中) → ring 0.8·PMax → 保压 0.8→0.95 线性 → 下降段线性落 0 → 低压 0
-    IF rPhase &lt; rET1 THEN
+    // 下包络: 峰+ring 整窗 0 (上升/振荡稳定自由窗)
+    //         → 保压 0.8→0.95·PMax 线性收紧 → 下降段线性落 0 → 低压 0
+    IF rPhase &lt; rET2 THEN
         rTargetLower := 0.0;
-    ELSIF rPhase &lt; rET2 THEN
-        rTargetLower := ENV_WH_RINGLO * rPMax;
     ELSIF rPhase &lt; rET3 THEN
         rTargetLower := ENV_WH_RINGLO * rPMax
                       + (ENV_WH_HOLDLO - ENV_WH_RINGLO) * rPMax * (rPhase - rET2) / (rET3 - rET2);
@@ -2220,30 +2218,29 @@ CASE iWaveType OF
     END_IF
 
 ELSE  // ---- 正弦 (Fig.3), 含未知类型兜底 ----
+    // 直线走廊 (与标准图样式一致): 把标称近似为三角波, ±ENV_SINE_W
+    // 时移并 ±ΔP 压移。真正弦在走廊内 (ΔP ≥ 0.3%·PMax 时恒成立)。
     rEnvDP := rEnvPctP;
     IF rEnvDP &lt;= 0.0 THEN rEnvDP := ENV_SINE_DP; END_IF
     rEnvDP := rEnvDP * rPMax;
+    rEnvRng := rPMax - rPMin;
 
-    // 上包络: 向峰 (φ=0.5) 时移 ENV_SINE_W; 峰区平顶 = 0.1C 最大驻留
+    // 上包络: 峰区平顶 0.1C (最大驻留), 其余为时移三角直线, 谷处 V 形
     IF ABS(rPhase - 0.5) &lt;= ENV_SINE_W THEN
         rTargetUpper := rPMax + rEnvDP;
+    ELSIF rPhase &lt; 0.5 THEN
+        rTargetUpper := rPMin + 2.0 * rEnvRng * (rPhase + ENV_SINE_W) + rEnvDP;
     ELSE
-        IF rPhase &lt; 0.5 THEN rPhiSh := rPhase + ENV_SINE_W; ELSE rPhiSh := rPhase - ENV_SINE_W; END_IF
-        rTargetUpper := FN_PulseWave(
-            rPhaseIn := rPhiSh,
-            rPMin := rPMin, rPMax := rPMax, iWaveType := 0,
-            rR := 0.0, rH := 0.0, rF := 0.0, rRing := 0.0, rPeakOS := rPMax) + rEnvDP;
+        rTargetUpper := rPMin + 2.0 * rEnvRng * (1.0 - rPhase + ENV_SINE_W) + rEnvDP;
     END_IF
 
-    // 下包络: 向谷 (φ=0/1) 时移 ENV_SINE_W; 谷区平底 = 0.1C 最大驻留
+    // 下包络: 谷区平底 0.1C (最大驻留), 其余为时移三角直线, 峰处 Λ 形
     IF rPhase &lt;= ENV_SINE_W OR rPhase &gt;= 1.0 - ENV_SINE_W THEN
         rTargetLower := rPMin - rEnvDP;
+    ELSIF rPhase &lt; 0.5 THEN
+        rTargetLower := rPMin + 2.0 * rEnvRng * (rPhase - ENV_SINE_W) - rEnvDP;
     ELSE
-        IF rPhase &lt; 0.5 THEN rPhiSh := rPhase - ENV_SINE_W; ELSE rPhiSh := rPhase + ENV_SINE_W; END_IF
-        rTargetLower := FN_PulseWave(
-            rPhaseIn := rPhiSh,
-            rPMin := rPMin, rPMax := rPMax, iWaveType := 0,
-            rR := 0.0, rH := 0.0, rF := 0.0, rRing := 0.0, rPeakOS := rPMax) - rEnvDP;
+        rTargetLower := rPMin + 2.0 * rEnvRng * (1.0 - rPhase - ENV_SINE_W) - rEnvDP;
     END_IF
 END_CASE
 
