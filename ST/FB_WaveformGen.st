@@ -56,10 +56,13 @@ VAR
 	rET3 : REAL; // 包络段边界 3
 	rET4 : REAL; // 包络段边界 4 (仅水锤)
 	rBaseUp : REAL; // 低压段包络上限 = max(1.1·PMin, 0.345MPa)
+	rEnvRng : REAL; // 正弦包络: 放大三角全幅 = PMax-PMin+2·ΔP (走廊斜率用)
+	rEnvBase : REAL; // 正弦包络: 放大三角谷值 = PMin-ΔP
 END_VAR
 VAR CONSTANT
 	// ===== ARP1383C 容差包络常数 (Fig.1 / Fig.2 / Fig.3) =====
 	ENV_SINE_DP   : REAL := 0.02;  // Fig.3 正弦压力容差 ×PMax (TOLERANCE = .02 x PMax)
+	ENV_SINE_W    : REAL := 0.05;  // Fig.3 ±时移 = 0.1C 驻留/畸变的一半 (MAX DWELL/DISTORTION = 0.1C)
 	ENV_TRAP_UP   : REAL := 1.04;  // Fig.1 保压带上限 ×PMax
 	ENV_TRAP_LO   : REAL := 0.96;  // Fig.1 保压带下限 ×PMax (带内驻留应为 10%~37% 周期)
 	ENV_SLACK     : REAL := 0.05;  // Fig.1 升/降沿包络张开宽度 (周期占比)
@@ -212,11 +215,13 @@ END_IF
 // ============================================================
 // ARP1383C 容差包络 — 按标准 Fig.1 / Fig.2 / Fig.3 阴影带生成
 //
-// 正弦  (Fig.3): 包络 = 标称正弦 ±ΔP 垂直压力带 (图注 TOLERANCE =
-//               .02 x PMax; ΔP = rEnvPctP·PMax, 默认 0.02); 图 3 另
-//               两处标注 — 峰/谷最大驻留 0.1C、PMean 处最大畸变
-//               0.1C — 为时间域波形质量约束, 不在压力包络内表达,
-//               如需判定须另行检查
+// 正弦  (Fig.3): 直线走廊 = 放大三角 (谷 PMin-ΔP 到峰 PMax+ΔP)
+//               仅 ±0.05C 时移, 不另加压移。上包络峰区平顶 0.1C
+//               (最大驻留)、谷处 V 形; 下包络谷区平底 0.1C、峰处
+//               Λ 形; 峰/谷处垂直容差 ±ΔP (标准 0.02·PMax); PMean
+//               处水平带宽恒为 0.1C (最大畸变), 与 ΔP 取值无关。
+//               ΔP ≥ 0.71%·(PMax-PMin) 时真正弦恒在走廊内; 小幅值
+//               大容差工况由 V/Λ 顶钳位兜底
 // 梯形  (Fig.1 上图/供油腔): 保压带 [0.96, 1.04]·PMax; 低压段上限
 //               1.1·PMin (不低于 0.345 MPa = 50 psi); 升沿: 上包络
 //               提前 ENV_SLACK 到顶 / 下包络滞后 ENV_SLACK 到 0.96;
@@ -296,13 +301,36 @@ CASE iWaveType OF
     END_IF
 
 ELSE  // ---- 正弦 (Fig.3), 含未知类型兜底 ----
-    // 包络 = 标称曲线 ±ΔP (垂直压力带, 图注 TOLERANCE = .02 x PMax)
+    // 直线走廊 (与标准图一致): 放大三角 (谷 PMin-ΔP 到峰 PMax+ΔP)
+    // 仅 ±ENV_SINE_W 时移。三个图注精确成立: 峰/谷平段 0.1C (最大
+    // 驻留)、峰/谷垂直容差 ±ΔP、PMean 处带宽 0.1C (最大畸变)。
     rEnvDP := rEnvPctP;
     IF rEnvDP <= 0.0 THEN rEnvDP := ENV_SINE_DP; END_IF
     rEnvDP := rEnvDP * rPMax;
+    rEnvBase := rPMin - rEnvDP;
+    rEnvRng := (rPMax - rPMin) + 2.0 * rEnvDP;
 
-    rTargetUpper := rTarget + rEnvDP;
-    rTargetLower := rTarget - rEnvDP;
+    // 上包络: 峰区平顶 0.1C (最大驻留), 其余为时移放大三角直线, 谷处 V 形
+    IF ABS(rPhase - 0.5) <= ENV_SINE_W THEN
+        rTargetUpper := rPMax + rEnvDP;
+    ELSIF rPhase < 0.5 THEN
+        rTargetUpper := rEnvBase + 2.0 * rEnvRng * (rPhase + ENV_SINE_W);
+    ELSE
+        rTargetUpper := rEnvBase + 2.0 * rEnvRng * (1.0 - rPhase + ENV_SINE_W);
+    END_IF
+    // V 顶钳位: 小幅值大容差工况防止谷区上包络压到标称正弦之下
+    IF rTargetUpper < rPMin + rEnvDP THEN rTargetUpper := rPMin + rEnvDP; END_IF
+
+    // 下包络: 谷区平底 0.1C (最大驻留), 其余为时移放大三角直线, 峰处 Λ 形
+    IF rPhase <= ENV_SINE_W OR rPhase >= 1.0 - ENV_SINE_W THEN
+        rTargetLower := rEnvBase;
+    ELSIF rPhase < 0.5 THEN
+        rTargetLower := rEnvBase + 2.0 * rEnvRng * (rPhase - ENV_SINE_W);
+    ELSE
+        rTargetLower := rEnvBase + 2.0 * rEnvRng * (1.0 - rPhase - ENV_SINE_W);
+    END_IF
+    // Λ 顶钳位: 防止峰区下包络顶到标称正弦之上
+    IF rTargetLower > rPMax - rEnvDP THEN rTargetLower := rPMax - rEnvDP; END_IF
 END_CASE
 
 IF rTargetLower < 0.0 THEN rTargetLower := 0.0; END_IF
