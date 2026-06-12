@@ -14,7 +14,7 @@ VAR_INPUT
 	rDt : REAL; // 控制周期 (s)
 	bReset : BOOL; // 复位相位
 	nMffLeadSteps : INT; // MFF超前步数: 提前N步计算目标值给MFF使用
-	rEnvPctP : REAL := 0.05; // ARP1383C 包络压力容差 ×PMax，默认 5%
+	rEnvPctP : REAL := 0.05; // 正弦(Fig.3)包络压力容差 ×PMax; 写 ≤0 用标准值 0.02; 梯形/水锤包络比例由 ARP1383C 固定
 END_VAR
 VAR_OUTPUT
 	rTarget : REAL; // 当前目标压力 (MPa)
@@ -50,7 +50,27 @@ VAR
 	rSum : REAL; // 水锤波 5 段占比和 (用于归一化)
 	rPeakOS : REAL; // 水锤波过冲峰压力 = Pmax + rOS*(Pmax-Pmin)
 	rPhaseLead : REAL; // 超前相位
-	rEnvDP : REAL; // 包络压力半带宽 (MPa)
+	rEnvDP : REAL; // 正弦包络压力半带宽 (MPa)
+	rET1 : REAL; // 包络段边界 1 (累积相位)
+	rET2 : REAL; // 包络段边界 2
+	rET3 : REAL; // 包络段边界 3
+	rET4 : REAL; // 包络段边界 4 (仅水锤)
+	rBaseUp : REAL; // 低压段包络上限 = max(1.1·PMin, 0.345MPa)
+	rPhiSh : REAL; // 正弦包络时移相位
+END_VAR
+VAR CONSTANT
+	// ===== ARP1383C 容差包络常数 (Fig.1 / Fig.2 / Fig.3) =====
+	ENV_SINE_DP   : REAL := 0.02;  // Fig.3 正弦压力容差 ×PMax (TOLERANCE = .02 x PMax)
+	ENV_SINE_W    : REAL := 0.05;  // Fig.3 ±时移 = 0.1C 驻留/畸变的一半 (MAX DWELL/DISTORTION = 0.1C)
+	ENV_TRAP_UP   : REAL := 1.04;  // Fig.1 保压带上限 ×PMax
+	ENV_TRAP_LO   : REAL := 0.96;  // Fig.1 保压带下限 ×PMax (带内驻留应为 10%~37% 周期)
+	ENV_SLACK     : REAL := 0.05;  // Fig.1 升/降沿包络张开宽度 (周期占比)
+	ENV_BASE_K    : REAL := 1.1;   // 低压段包络上限 ×PMin (Fig.1/2 公用)
+	ENV_BASE_MIN  : REAL := 0.345; // 低压段包络上限下钳 (MPa, = 50 psi "BUT NOT LESS THAN")
+	ENV_WH_PKTOL  : REAL := 0.04;  // Fig.2 过冲峰容差 ×P_OS (PEAK PRESSURE TOLERANCE ±4%)
+	ENV_WH_UP     : REAL := 1.1;   // Fig.2 保压带上限 ×PMax (1.1·P_Oper)
+	ENV_WH_RINGLO : REAL := 0.8;   // Fig.2 ring 段允许回落下限 ×PMax (0.8·P_Oper)
+	ENV_WH_HOLDLO : REAL := 0.95;  // Fig.2 保压末端下限 ×PMax (0.95·P_Oper)
 END_VAR
 
 
@@ -192,18 +212,117 @@ END_IF
 
 
 // ============================================================
-// ARP1383C 误差包络 (纯压力容差贴身带)
+// ARP1383C 容差包络 — 按标准 Fig.1 / Fig.2 / Fig.3 分波形生成
 //
-//   P_upper(φ) = P_nom(φ) + ΔP
-//   P_lower(φ) = P_nom(φ) - ΔP，其中 ΔP = rEnvPctP × PMax (默认 5%)
-//
-// 注: 已取消时间容差功能 (原 φ±Δt 三相位采样)，包络在任意相位
-// 都是标称波形上下各 ΔP 的等宽带。
+// 正弦  (Fig.3): 标称 ±ΔP (默认 2%·PMax); 峰/谷允许 0.1C 驻留,
+//               PMean 处允许 0.1C 时间畸变 → 实现为 ±0.05C 时移包络:
+//               上包络取向峰时移、下包络取向谷时移的标称值 ±ΔP
+// 梯形  (Fig.1): 保压带 [0.96, 1.04]·PMax; 低压段上限 1.1·PMin
+//               (不低于 0.345 MPa); 升沿: 上包络提前 ENV_SLACK 到顶/
+//               下包络滞后 ENV_SLACK 到 0.96; 降沿: 下包络立即落 0,
+//               上包络自下降结束后缓降至周期末 (允许实际压力长拖尾)
+// 水锤  (Fig.2): 过冲峰段 ±4%·P_OS; ring 段上包络线性收至 1.1·PMax,
+//               下限 0.8·PMax; 保压带上限 1.1·PMax / 下限 0.8→0.95
+//               线性收紧; 下降段 (标准为 5%C 窗口) 上包络保持到段尾;
+//               低压段上限 1.1·PMin
+// 注: Fig.1 标注的保压带驻留 10%~37% 周期为参数约束 (设 rHoldPct
+//     时遵守), 不在包络内强制; 高 PMin 工况按标准 NOTE 可收紧为
+//     [0.9, 1.1]·PMin, 当前未实现。
 // ============================================================
-rEnvDP := rEnvPctP * rPMax;
+rBaseUp := ENV_BASE_K * rPMin;
+IF rBaseUp < ENV_BASE_MIN THEN rBaseUp := ENV_BASE_MIN; END_IF
 
-rTargetUpper := rTarget + rEnvDP;
-rTargetLower := rTarget - rEnvDP;
+CASE iWaveType OF
+
+1:  // ---- 梯形 (Fig.1) ----
+    rET1 := rR;             // 升沿结束
+    rET2 := rR + rH;        // 保压结束 / 降沿开始
+    rET3 := rR + rH + rF;   // 降沿结束
+
+    // 上包络: (0, 1.1·PMin) → (T1-slack, 1.04·PMax) → 平 → (T3) → 缓降 → (1, 1.1·PMin)
+    IF rPhase < rET1 - ENV_SLACK THEN
+        rTargetUpper := rBaseUp + (ENV_TRAP_UP * rPMax - rBaseUp) * rPhase / (rET1 - ENV_SLACK);
+    ELSIF rPhase < rET3 THEN
+        rTargetUpper := ENV_TRAP_UP * rPMax;
+    ELSIF rET3 < 0.999 THEN
+        rTargetUpper := ENV_TRAP_UP * rPMax
+                      + (rBaseUp - ENV_TRAP_UP * rPMax) * (rPhase - rET3) / (1.0 - rET3);
+    ELSE
+        rTargetUpper := rBaseUp;
+    END_IF
+
+    // 下包络: (0, 0) → (T1+slack, 0.96·PMax) → 平 → (T2) → (T2+slack, 0) → 0
+    IF rPhase < rET1 + ENV_SLACK THEN
+        rTargetLower := ENV_TRAP_LO * rPMax * rPhase / (rET1 + ENV_SLACK);
+    ELSIF rPhase < rET2 THEN
+        rTargetLower := ENV_TRAP_LO * rPMax;
+    ELSIF rPhase < rET2 + ENV_SLACK THEN
+        rTargetLower := ENV_TRAP_LO * rPMax * (1.0 - (rPhase - rET2) / ENV_SLACK);
+    ELSE
+        rTargetLower := 0.0;
+    END_IF
+
+2:  // ---- 水锤 (Fig.2) ----
+    rET1 := rR;                      // 过冲峰段结束
+    rET2 := rR + rRing;              // ring 段结束
+    rET3 := rR + rRing + rH;         // 保压结束 / 下降开始
+    rET4 := rR + rRing + rH + rF;    // 下降结束
+
+    // 上包络: 峰段 1.04·P_OS → ring 线性收至 1.1·PMax → 保压/下降平 1.1·PMax → 低压 1.1·PMin
+    IF rPhase < rET1 THEN
+        rTargetUpper := (1.0 + ENV_WH_PKTOL) * rPeakOS;
+    ELSIF rPhase < rET2 THEN
+        rTargetUpper := (1.0 + ENV_WH_PKTOL) * rPeakOS
+                      + (ENV_WH_UP * rPMax - (1.0 + ENV_WH_PKTOL) * rPeakOS)
+                        * (rPhase - rET1) / (rET2 - rET1);
+    ELSIF rPhase < rET4 THEN
+        rTargetUpper := ENV_WH_UP * rPMax;
+    ELSE
+        rTargetUpper := rBaseUp;
+    END_IF
+
+    // 下包络: 峰段 0 (上升中) → ring 0.8·PMax → 保压 0.8→0.95 线性 → 下降段线性落 0 → 低压 0
+    IF rPhase < rET1 THEN
+        rTargetLower := 0.0;
+    ELSIF rPhase < rET2 THEN
+        rTargetLower := ENV_WH_RINGLO * rPMax;
+    ELSIF rPhase < rET3 THEN
+        rTargetLower := ENV_WH_RINGLO * rPMax
+                      + (ENV_WH_HOLDLO - ENV_WH_RINGLO) * rPMax * (rPhase - rET2) / (rET3 - rET2);
+    ELSIF rPhase < rET4 THEN
+        rTargetLower := ENV_WH_HOLDLO * rPMax * (1.0 - (rPhase - rET3) / (rET4 - rET3));
+    ELSE
+        rTargetLower := 0.0;
+    END_IF
+
+ELSE  // ---- 正弦 (Fig.3), 含未知类型兜底 ----
+    rEnvDP := rEnvPctP;
+    IF rEnvDP <= 0.0 THEN rEnvDP := ENV_SINE_DP; END_IF
+    rEnvDP := rEnvDP * rPMax;
+
+    // 上包络: 向峰 (φ=0.5) 时移 ENV_SINE_W; 峰区平顶 = 0.1C 最大驻留
+    IF ABS(rPhase - 0.5) <= ENV_SINE_W THEN
+        rTargetUpper := rPMax + rEnvDP;
+    ELSE
+        IF rPhase < 0.5 THEN rPhiSh := rPhase + ENV_SINE_W; ELSE rPhiSh := rPhase - ENV_SINE_W; END_IF
+        rTargetUpper := FN_PulseWave(
+            rPhaseIn := rPhiSh,
+            rPMin := rPMin, rPMax := rPMax, iWaveType := 0,
+            rR := 0.0, rH := 0.0, rF := 0.0, rRing := 0.0, rPeakOS := rPMax) + rEnvDP;
+    END_IF
+
+    // 下包络: 向谷 (φ=0/1) 时移 ENV_SINE_W; 谷区平底 = 0.1C 最大驻留
+    IF rPhase <= ENV_SINE_W OR rPhase >= 1.0 - ENV_SINE_W THEN
+        rTargetLower := rPMin - rEnvDP;
+    ELSE
+        IF rPhase < 0.5 THEN rPhiSh := rPhase - ENV_SINE_W; ELSE rPhiSh := rPhase + ENV_SINE_W; END_IF
+        rTargetLower := FN_PulseWave(
+            rPhaseIn := rPhiSh,
+            rPMin := rPMin, rPMax := rPMax, iWaveType := 0,
+            rR := 0.0, rH := 0.0, rF := 0.0, rRing := 0.0, rPeakOS := rPMax) - rEnvDP;
+    END_IF
+END_CASE
+
 IF rTargetLower < 0.0 THEN rTargetLower := 0.0; END_IF
 IF rTargetUpper > 50.0 THEN rTargetUpper := 50.0; END_IF
 

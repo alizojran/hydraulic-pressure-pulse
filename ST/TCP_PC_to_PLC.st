@@ -124,7 +124,7 @@ GVL_PulsePressure.PP_Oil_CycleReset := TwoWord_to_Float.Output;         // 72-73
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
-GVL_PulsePressure.PP_Oil_EnvPctP := TwoWord_to_Float.Output;            // 74-75: ARP1383C 包络压力容差 ×PMax (默认 0.05)
+GVL_PulsePressure.PP_Oil_EnvPctP := TwoWord_to_Float.Output;            // 74-75: 正弦包络压力容差 ×PMax (≤0 用标准值 0.02)
 i := i + 2;
 
 TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
