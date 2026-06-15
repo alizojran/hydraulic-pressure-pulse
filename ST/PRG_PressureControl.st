@@ -207,7 +207,9 @@ CASE iState OF
         rDt           := rDt,
         bReset        := FALSE,
         nMffLeadSteps := 0,    // 已移除 MFF, 不再需要超前相位
-        rEnvPctP      := GVL_PulsePressure.PP_Oil_EnvPctP
+        rEnvPctP      := GVL_PulsePressure.PP_Oil_EnvPctP,
+        rActual       := GVL_PulsePressure.PP_Oil_ActualPressure,  // 供包络估计命令→实际相位滞后
+        bEnvFollowActual := TRUE   // 包络按实际曲线相位绘制 (补偿传输滞后)
     );
 
     GVL_PulsePressure.PP_Oil_SetpointPressure := fbWaveGen_O.rTarget;

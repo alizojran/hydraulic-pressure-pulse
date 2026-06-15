@@ -15,6 +15,8 @@ VAR_INPUT
 	bReset : BOOL; // 复位相位
 	nMffLeadSteps : INT; // MFF超前步数: 提前N步计算目标值给MFF使用
 	rEnvPctP : REAL := 0.05; // 正弦(Fig.3)包络压力容差 ×PMax; 写 ≤0 用标准值 0.02; 梯形/水锤包络比例由 ARP1383C 固定
+	rActual : REAL; // 实际反馈压力 (MPa) — 仅用于估计命令→实际相位滞后, 使包络与实际曲线对齐; 不接(=0)则滞后保持 0
+	bEnvFollowActual : BOOL := TRUE; // 包络跟随实际相位: TRUE=按实际(滞后补偿)画包络; FALSE=按指令相位画(旧行为)
 END_VAR
 VAR_OUTPUT
 	rTarget : REAL; // 当前目标压力 (MPa)
@@ -33,6 +35,7 @@ VAR_OUTPUT
 	rSegHold : REAL; // 保压段归一化相位宽
 	rSegFall : REAL; // 下降段归一化相位宽
 	rPeakOSOut : REAL; // (仅水锤) 过冲峰目标压力 (MPa); 其他波形 = rPMax
+	rEnvLagPhase : REAL; // 估计的命令→实际相位滞后 (周期占比, 0~0.5) — 包络平移量, 诊断用
 END_VAR
 VAR
 	rPhaseAcc : REAL; // 相位累加器 (0~1)
@@ -57,6 +60,15 @@ VAR
 	rET4 : REAL; // 包络段边界 4 (仅水锤)
 	rBaseUp : REAL; // 低压段包络上限 = max(1.1·PMin, 0.345MPa)
 	rEnvRng : REAL; // 正弦包络: PMax-PMin (三角走廊斜率用)
+	rPhaseEnv : REAL; // 包络评估相位 = rPhase - 滞后 (使包络对齐实际曲线)
+	rEnvMean : REAL; // PMean = (PMax+PMin)/2 (滞后估计的过零电平)
+	rEnvLagFilt : REAL; // EMA 平滑后的滞后估计 (周期占比)
+	rLagRaw : REAL; // 本周期原始滞后 (实际过零相位 - 指令过零相位)
+	rCmdCrossPhase : REAL; // 本周期指令上升过 PMean 的相位
+	rCmdPrevX : REAL; // 上一步指令值 (过零检测)
+	rActPrevX : REAL; // 上一步实际值 (过零检测)
+	bCmdCrossed : BOOL; // 本周期指令已过 PMean (上升)
+	bActCrossed : BOOL; // 本周期实际已过 PMean (上升)
 END_VAR
 VAR CONSTANT
 	// ===== ARP1383C 容差包络常数 (Fig.1 / Fig.2 / Fig.3) =====
@@ -71,6 +83,8 @@ VAR CONSTANT
 	ENV_WH_UP     : REAL := 1.1;   // Fig.2 保压带上限 ×PMax (1.1·P_Oper)
 	ENV_WH_RINGLO : REAL := 0.8;   // Fig.2 保压段起始下限 ×PMax (0.8·P_Oper)
 	ENV_WH_HOLDLO : REAL := 0.95;  // Fig.2 保压段末端下限 ×PMax (0.95·P_Oper)
+	ENV_LAG_LP    : REAL := 0.15;  // 滞后估计 EMA 系数 (每周期更新一次, 0.15 ≈ 7 周期收敛)
+	ENV_LAG_MAX   : REAL := 0.5;   // 滞后估计限幅 (周期占比) — 防异常过零导致包络大幅错位
 END_VAR
 
 
@@ -90,6 +104,11 @@ IF bReset OR NOT bEnable THEN
     bNewCycle := FALSE;
     bFirstRun := TRUE;
     iIdxCounter := 0;
+    // 滞后估计过零状态复位 (rEnvLagFilt 保留: 系统传输滞后跨测试不变)
+    bCmdCrossed := FALSE;
+    bActCrossed := FALSE;
+    rCmdPrevX := rPMin;
+    rActPrevX := rPMin;
     RETURN;
 END_IF
 
@@ -229,9 +248,47 @@ END_IF
 // 注: Fig.1 标注的保压带驻留 10%~37% 周期为参数约束 (设 rHoldPct
 //     时遵守), 不在包络内强制; 高 PMin 工况按标准 NOTE 可收紧为
 //     [0.9, 1.1]·PMin, 当前未实现。
+//
+// 相位对齐: 实际压力相对指令有传输滞后, 若包络按指令相位画, 边沿处
+//   实际会被误判出界。故用 PMean 上升过零估计 命令→实际 滞后, 平移
+//   包络评估相位 (rPhaseEnv = rPhase - 滞后), 使容差带对齐实际曲线。
 // ============================================================
 rBaseUp := ENV_BASE_K * rPMin;
 IF rBaseUp < ENV_BASE_MIN THEN rBaseUp := ENV_BASE_MIN; END_IF
+
+// ---- 命令→实际 相位滞后估计 (PMean 上升过零, 每周期一次, EMA 平滑) ----
+rEnvMean := (rPMax + rPMin) / 2.0;
+IF bNewCycle THEN
+    bCmdCrossed := FALSE;
+    bActCrossed := FALSE;
+END_IF
+IF bEnvFollowActual THEN
+    // 指令上升过 PMean → 记录指令过零相位
+    IF (NOT bCmdCrossed) AND (rCmdPrevX < rEnvMean) AND (rTarget >= rEnvMean) THEN
+        rCmdCrossPhase := rPhase;
+        bCmdCrossed := TRUE;
+    END_IF
+    // 实际上升过 PMean (在指令过零之后) → 滞后 = 相位差, EMA 更新
+    IF (NOT bActCrossed) AND bCmdCrossed AND (rActPrevX < rEnvMean) AND (rActual >= rEnvMean) THEN
+        rLagRaw := rPhase - rCmdCrossPhase;
+        IF rLagRaw < -0.5 THEN rLagRaw := rLagRaw + 1.0; END_IF
+        IF rLagRaw >  0.5 THEN rLagRaw := rLagRaw - 1.0; END_IF
+        rEnvLagFilt := rEnvLagFilt + ENV_LAG_LP * (rLagRaw - rEnvLagFilt);
+        IF rEnvLagFilt >  ENV_LAG_MAX THEN rEnvLagFilt :=  ENV_LAG_MAX; END_IF
+        IF rEnvLagFilt < -ENV_LAG_MAX THEN rEnvLagFilt := -ENV_LAG_MAX; END_IF
+        bActCrossed := TRUE;
+    END_IF
+ELSE
+    rEnvLagFilt := 0.0;
+END_IF
+rCmdPrevX := rTarget;
+rActPrevX := rActual;
+rEnvLagPhase := rEnvLagFilt;
+
+// 包络评估相位 = 指令相位 - 滞后 (包络特征延后, 对齐滞后的实际)
+rPhaseEnv := rPhase - rEnvLagFilt;
+IF rPhaseEnv < 0.0  THEN rPhaseEnv := rPhaseEnv + 1.0; END_IF
+IF rPhaseEnv >= 1.0 THEN rPhaseEnv := rPhaseEnv - 1.0; END_IF
 
 CASE iWaveType OF
 
@@ -241,24 +298,24 @@ CASE iWaveType OF
     rET3 := rR + rH + rF;   // 降沿结束
 
     // 上包络: (0, 1.1·PMin) → (T1-slack, 1.04·PMax) → 平 → (T3) → 缓降 → (1, 1.1·PMin)
-    IF rPhase < rET1 - ENV_SLACK THEN
-        rTargetUpper := rBaseUp + (ENV_TRAP_UP * rPMax - rBaseUp) * rPhase / (rET1 - ENV_SLACK);
-    ELSIF rPhase < rET3 THEN
+    IF rPhaseEnv < rET1 - ENV_SLACK THEN
+        rTargetUpper := rBaseUp + (ENV_TRAP_UP * rPMax - rBaseUp) * rPhaseEnv / (rET1 - ENV_SLACK);
+    ELSIF rPhaseEnv < rET3 THEN
         rTargetUpper := ENV_TRAP_UP * rPMax;
     ELSIF rET3 < 0.999 THEN
         rTargetUpper := ENV_TRAP_UP * rPMax
-                      + (rBaseUp - ENV_TRAP_UP * rPMax) * (rPhase - rET3) / (1.0 - rET3);
+                      + (rBaseUp - ENV_TRAP_UP * rPMax) * (rPhaseEnv - rET3) / (1.0 - rET3);
     ELSE
         rTargetUpper := rBaseUp;
     END_IF
 
     // 下包络: (0, 0) → (T1+slack, 0.96·PMax) → 平 → (T2) → (T2+slack, 0) → 0
-    IF rPhase < rET1 + ENV_SLACK THEN
-        rTargetLower := ENV_TRAP_LO * rPMax * rPhase / (rET1 + ENV_SLACK);
-    ELSIF rPhase < rET2 THEN
+    IF rPhaseEnv < rET1 + ENV_SLACK THEN
+        rTargetLower := ENV_TRAP_LO * rPMax * rPhaseEnv / (rET1 + ENV_SLACK);
+    ELSIF rPhaseEnv < rET2 THEN
         rTargetLower := ENV_TRAP_LO * rPMax;
-    ELSIF rPhase < rET2 + ENV_SLACK THEN
-        rTargetLower := ENV_TRAP_LO * rPMax * (1.0 - (rPhase - rET2) / ENV_SLACK);
+    ELSIF rPhaseEnv < rET2 + ENV_SLACK THEN
+        rTargetLower := ENV_TRAP_LO * rPMax * (1.0 - (rPhaseEnv - rET2) / ENV_SLACK);
     ELSE
         rTargetLower := 0.0;
     END_IF
@@ -272,9 +329,9 @@ CASE iWaveType OF
     // 上包络: 峰+ring 整窗平直 1.04·P_OS (标准 0~15%C 全幅自由窗)
     //         → 保压/下降 1.1·PMax (上包络保持到下降段尾 = 标准 5%C 窗口)
     //         → 低压 1.1·PMin
-    IF rPhase < rET2 THEN
+    IF rPhaseEnv < rET2 THEN
         rTargetUpper := (1.0 + ENV_WH_PKTOL) * rPeakOS;
-    ELSIF rPhase < rET4 THEN
+    ELSIF rPhaseEnv < rET4 THEN
         rTargetUpper := ENV_WH_UP * rPMax;
     ELSE
         rTargetUpper := rBaseUp;
@@ -282,13 +339,13 @@ CASE iWaveType OF
 
     // 下包络: 峰+ring 整窗 0 (上升/振荡稳定自由窗)
     //         → 保压 0.8→0.95·PMax 线性收紧 → 下降段线性落 0 → 低压 0
-    IF rPhase < rET2 THEN
+    IF rPhaseEnv < rET2 THEN
         rTargetLower := 0.0;
-    ELSIF rPhase < rET3 THEN
+    ELSIF rPhaseEnv < rET3 THEN
         rTargetLower := ENV_WH_RINGLO * rPMax
-                      + (ENV_WH_HOLDLO - ENV_WH_RINGLO) * rPMax * (rPhase - rET2) / (rET3 - rET2);
-    ELSIF rPhase < rET4 THEN
-        rTargetLower := ENV_WH_HOLDLO * rPMax * (1.0 - (rPhase - rET3) / (rET4 - rET3));
+                      + (ENV_WH_HOLDLO - ENV_WH_RINGLO) * rPMax * (rPhaseEnv - rET2) / (rET3 - rET2);
+    ELSIF rPhaseEnv < rET4 THEN
+        rTargetLower := ENV_WH_HOLDLO * rPMax * (1.0 - (rPhaseEnv - rET3) / (rET4 - rET3));
     ELSE
         rTargetLower := 0.0;
     END_IF
@@ -302,21 +359,21 @@ ELSE  // ---- 正弦 (Fig.3), 含未知类型兜底 ----
     rEnvRng := rPMax - rPMin;
 
     // 上包络: 峰区平顶 0.1C (最大驻留), 其余为时移三角直线, 谷处 V 形
-    IF ABS(rPhase - 0.5) <= ENV_SINE_W THEN
+    IF ABS(rPhaseEnv - 0.5) <= ENV_SINE_W THEN
         rTargetUpper := rPMax + rEnvDP;
-    ELSIF rPhase < 0.5 THEN
-        rTargetUpper := rPMin + 2.0 * rEnvRng * (rPhase + ENV_SINE_W) + rEnvDP;
+    ELSIF rPhaseEnv < 0.5 THEN
+        rTargetUpper := rPMin + 2.0 * rEnvRng * (rPhaseEnv + ENV_SINE_W) + rEnvDP;
     ELSE
-        rTargetUpper := rPMin + 2.0 * rEnvRng * (1.0 - rPhase + ENV_SINE_W) + rEnvDP;
+        rTargetUpper := rPMin + 2.0 * rEnvRng * (1.0 - rPhaseEnv + ENV_SINE_W) + rEnvDP;
     END_IF
 
     // 下包络: 谷区平底 0.1C (最大驻留), 其余为时移三角直线, 峰处 Λ 形
-    IF rPhase <= ENV_SINE_W OR rPhase >= 1.0 - ENV_SINE_W THEN
+    IF rPhaseEnv <= ENV_SINE_W OR rPhaseEnv >= 1.0 - ENV_SINE_W THEN
         rTargetLower := rPMin - rEnvDP;
-    ELSIF rPhase < 0.5 THEN
-        rTargetLower := rPMin + 2.0 * rEnvRng * (rPhase - ENV_SINE_W) - rEnvDP;
+    ELSIF rPhaseEnv < 0.5 THEN
+        rTargetLower := rPMin + 2.0 * rEnvRng * (rPhaseEnv - ENV_SINE_W) - rEnvDP;
     ELSE
-        rTargetLower := rPMin + 2.0 * rEnvRng * (1.0 - rPhase - ENV_SINE_W) - rEnvDP;
+        rTargetLower := rPMin + 2.0 * rEnvRng * (1.0 - rPhaseEnv - ENV_SINE_W) - rEnvDP;
     END_IF
 END_CASE
 
