@@ -2905,7 +2905,7 @@ TCP_PC_to_PLC();
                   </variable>
                   <variable name="ENV_KMAX">
                     <type><INT /></type>
-                    <initialValue><simpleValue value="25" /></initialValue>
+                    <initialValue><simpleValue value="45" /></initialValue>
                   </variable>
                   <variable name="ENV_LAGSMOOTH">
                     <type><REAL /></type>
