@@ -385,6 +385,11 @@
               <REAL />
             </type>
           </variable>
+          <variable name="PP_Oil_EnvPhaseLag">
+            <type>
+              <REAL />
+            </type>
+          </variable>
           <variable name="PP_Oil_ILC_Output">
             <type>
               <REAL />
@@ -2849,6 +2854,63 @@ TCP_PC_to_PLC();
                       <array><dimension lower="0" upper="9" /><baseType><REAL /></baseType></array>
                     </type>
                   </variable>
+                  <variable name="rEnvUpBuf_O">
+                    <type>
+                      <array><dimension lower="0" upper="1999" /><baseType><REAL /></baseType></array>
+                    </type>
+                  </variable>
+                  <variable name="rEnvLoBuf_O">
+                    <type>
+                      <array><dimension lower="0" upper="1999" /><baseType><REAL /></baseType></array>
+                    </type>
+                  </variable>
+                  <variable name="rEnvActBin_O">
+                    <type>
+                      <array><dimension lower="0" upper="99" /><baseType><REAL /></baseType></array>
+                    </type>
+                  </variable>
+                  <variable name="rEnvCmdBin_O">
+                    <type>
+                      <array><dimension lower="0" upper="99" /><baseType><REAL /></baseType></array>
+                    </type>
+                  </variable>
+                  <variable name="iEnvBinCnt_O">
+                    <type>
+                      <array><dimension lower="0" upper="99" /><baseType><INT /></baseType></array>
+                    </type>
+                  </variable>
+                  <variable name="rEnvLag_O"><type><REAL /></type></variable>
+                  <variable name="iEnvKDelay_O"><type><INT /></type></variable>
+                  <variable name="iEnvN_O"><type><INT /></type></variable>
+                  <variable name="iEnvIdx_O"><type><INT /></type></variable>
+                  <variable name="iEnvBin_O"><type><INT /></type></variable>
+                  <variable name="iEnvRd_O"><type><INT /></type></variable>
+                  <variable name="iEnvK_O"><type><INT /></type></variable>
+                  <variable name="iEnvB_O"><type><INT /></type></variable>
+                  <variable name="iEnvBestK_O"><type><INT /></type></variable>
+                  <variable name="rEnvCorr_O"><type><REAL /></type></variable>
+                  <variable name="rEnvBestCorr_O"><type><REAL /></type></variable>
+                  <variable name="rEnvMeanA_O"><type><REAL /></type></variable>
+                  <variable name="rEnvMeanC_O"><type><REAL /></type></variable>
+                  <variable name="rEnvLagNew_O"><type><REAL /></type></variable>
+                </localVars>
+                <localVars constant="true">
+                  <variable name="ENV_MAXPPC">
+                    <type><INT /></type>
+                    <initialValue><simpleValue value="2000" /></initialValue>
+                  </variable>
+                  <variable name="ENV_NCORR">
+                    <type><INT /></type>
+                    <initialValue><simpleValue value="100" /></initialValue>
+                  </variable>
+                  <variable name="ENV_KMAX">
+                    <type><INT /></type>
+                    <initialValue><simpleValue value="25" /></initialValue>
+                  </variable>
+                  <variable name="ENV_LAGSMOOTH">
+                    <type><REAL /></type>
+                    <initialValue><simpleValue value="0.3" /></initialValue>
+                  </variable>
                 </localVars>
               </interface>
               <body>
@@ -3033,9 +3095,95 @@ CASE iState OF
 
     GVL_PulsePressure.PP_Oil_SetpointPressure := fbWaveGen_O.rTarget;
 
-    // 包络输出 → GVL (供 HMI 绘制 ARP1383C 容差带)
-    GVL_PulsePressure.PP_Oil_TargetUpper := fbWaveGen_O.rTargetUpper;
-    GVL_PulsePressure.PP_Oil_TargetLower := fbWaveGen_O.rTargetLower;
+    // ============================================================
+    // ARP1383C 显示包络相位对齐 (仅显示, 不影响 ILC)
+    // 实际压力相对指令有稳态滞后; 若把命令相位包络直接送 HMI, "形状/
+    // 幅值合格但有滞后"的实际曲线会在边沿被画成越界。这里用整周期互
+    // 相关在线估 actual 相对指令的滞后, 把命令相位包络在时间上延迟同
+    // 样的量后送 HMI, 使容差带套住实际曲线。ILC 仍用命令相位包络
+    // (fbWaveGen_O.rTargetUpper/Lower, 见下方调用), 继续主动消除滞后,
+    // 控制行为不变。
+    // 算法: 每周期把 actual / 指令按相位分箱 (ENV_NCORR 箱); 周期边界
+    //       对两条均值曲线做去均值互相关, 取相关最大的整数滞后 kbest
+    //       → 滞后占比 kbest/ENV_NCORR, 逐周期指数平滑; 显示包络 = 命令
+    //       相位包络环形缓冲中延迟 round(lag·N) 个采样的值。
+    // ============================================================
+    iEnvN_O   := fbWaveGen_O.iPointsPerCycle;
+    iEnvIdx_O := fbWaveGen_O.iPointIndex;
+
+    IF fbWaveGen_O.bNewCycle THEN
+        IF (iEnvN_O &gt;= ENV_NCORR) AND (iEnvN_O &lt;= ENV_MAXPPC) THEN
+            // 分箱取均值 + 总体均值 (去均值用)
+            rEnvMeanA_O := 0.0;
+            rEnvMeanC_O := 0.0;
+            FOR iEnvB_O := 0 TO ENV_NCORR - 1 DO
+                IF iEnvBinCnt_O[iEnvB_O] &gt; 0 THEN
+                    rEnvActBin_O[iEnvB_O] := rEnvActBin_O[iEnvB_O] / INT_TO_REAL(iEnvBinCnt_O[iEnvB_O]);
+                    rEnvCmdBin_O[iEnvB_O] := rEnvCmdBin_O[iEnvB_O] / INT_TO_REAL(iEnvBinCnt_O[iEnvB_O]);
+                END_IF
+                rEnvMeanA_O := rEnvMeanA_O + rEnvActBin_O[iEnvB_O];
+                rEnvMeanC_O := rEnvMeanC_O + rEnvCmdBin_O[iEnvB_O];
+            END_FOR
+            rEnvMeanA_O := rEnvMeanA_O / INT_TO_REAL(ENV_NCORR);
+            rEnvMeanC_O := rEnvMeanC_O / INT_TO_REAL(ENV_NCORR);
+
+            // 去均值互相关, 搜索 k = 0..ENV_KMAX (actual 滞后 ⇒ 命令回移 k 对齐)
+            iEnvBestK_O    := 0;
+            rEnvBestCorr_O := -1.0E30;
+            FOR iEnvK_O := 0 TO ENV_KMAX DO
+                rEnvCorr_O := 0.0;
+                FOR iEnvB_O := 0 TO ENV_NCORR - 1 DO
+                    iEnvRd_O := iEnvB_O - iEnvK_O;
+                    IF iEnvRd_O &lt; 0 THEN iEnvRd_O := iEnvRd_O + ENV_NCORR; END_IF
+                    rEnvCorr_O := rEnvCorr_O
+                        + (rEnvActBin_O[iEnvB_O] - rEnvMeanA_O)
+                        * (rEnvCmdBin_O[iEnvRd_O] - rEnvMeanC_O);
+                END_FOR
+                IF rEnvCorr_O &gt; rEnvBestCorr_O THEN
+                    rEnvBestCorr_O := rEnvCorr_O;
+                    iEnvBestK_O    := iEnvK_O;
+                END_IF
+            END_FOR
+
+            rEnvLagNew_O := INT_TO_REAL(iEnvBestK_O) / INT_TO_REAL(ENV_NCORR);
+            rEnvLag_O    := rEnvLag_O + ENV_LAGSMOOTH * (rEnvLagNew_O - rEnvLag_O);
+            iEnvKDelay_O := REAL_TO_INT(rEnvLag_O * INT_TO_REAL(iEnvN_O));
+            IF iEnvKDelay_O &lt; 0 THEN iEnvKDelay_O := 0; END_IF
+            IF iEnvKDelay_O &gt; iEnvN_O - 1 THEN iEnvKDelay_O := iEnvN_O - 1; END_IF
+        ELSE
+            rEnvLag_O    := 0.0;   // N 超范围: 退化为命令相位包络
+            iEnvKDelay_O := 0;
+        END_IF
+        // 清空分箱, 开始累计新周期
+        FOR iEnvB_O := 0 TO ENV_NCORR - 1 DO
+            rEnvActBin_O[iEnvB_O] := 0.0;
+            rEnvCmdBin_O[iEnvB_O] := 0.0;
+            iEnvBinCnt_O[iEnvB_O] := 0;
+        END_FOR
+    END_IF
+
+    // 本采样: 写命令相位包络环形缓冲 + 按相位分箱累加 actual/指令; 输出延迟后的显示包络
+    IF (iEnvN_O &gt;= ENV_NCORR) AND (iEnvN_O &lt;= ENV_MAXPPC)
+       AND (iEnvIdx_O &gt;= 0) AND (iEnvIdx_O &lt; iEnvN_O) THEN
+        rEnvUpBuf_O[iEnvIdx_O] := fbWaveGen_O.rTargetUpper;
+        rEnvLoBuf_O[iEnvIdx_O] := fbWaveGen_O.rTargetLower;
+        iEnvBin_O := REAL_TO_INT(INT_TO_REAL(iEnvIdx_O) * INT_TO_REAL(ENV_NCORR) / INT_TO_REAL(iEnvN_O) - 0.5);
+        IF iEnvBin_O &lt; 0 THEN iEnvBin_O := 0; END_IF
+        IF iEnvBin_O &gt; ENV_NCORR - 1 THEN iEnvBin_O := ENV_NCORR - 1; END_IF
+        rEnvActBin_O[iEnvBin_O] := rEnvActBin_O[iEnvBin_O] + GVL_PulsePressure.PP_Oil_ActualPressure;
+        rEnvCmdBin_O[iEnvBin_O] := rEnvCmdBin_O[iEnvBin_O] + fbWaveGen_O.rTarget;
+        iEnvBinCnt_O[iEnvBin_O] := iEnvBinCnt_O[iEnvBin_O] + 1;
+
+        iEnvRd_O := iEnvIdx_O - iEnvKDelay_O;
+        IF iEnvRd_O &lt; 0 THEN iEnvRd_O := iEnvRd_O + iEnvN_O; END_IF
+        GVL_PulsePressure.PP_Oil_TargetUpper := rEnvUpBuf_O[iEnvRd_O];
+        GVL_PulsePressure.PP_Oil_TargetLower := rEnvLoBuf_O[iEnvRd_O];
+    ELSE
+        GVL_PulsePressure.PP_Oil_TargetUpper := fbWaveGen_O.rTargetUpper;
+        GVL_PulsePressure.PP_Oil_TargetLower := fbWaveGen_O.rTargetLower;
+    END_IF
+
+    GVL_PulsePressure.PP_Oil_EnvPhaseLag  := rEnvLag_O * 100.0;  // actual 滞后 (周期 %), 仅显示遥测
 
     GVL_PulsePressure.PP_Oil_WavePhase    := fbWaveGen_O.rPhase * 360.0;
     GVL_PulsePressure.PP_Oil_Frequency_FB := GVL_PulsePressure.PP_Oil_Frequency;

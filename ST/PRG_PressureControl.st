@@ -30,7 +30,24 @@ VAR
 	PP_Oil_ActualPressure : REAL;
 	nMs1msIdx : INT; // 1ms 采样缓冲写索引 (0..9, 满 10 即在 GVL 发布)
 	rPress1msBuf_O : ARRAY[0..9] OF REAL; // 油路 1ms 采样写缓冲 (本地, 写完整 10 个再整体公开)
+	// --- ARP1383C 显示包络相位对齐 (整周期互相关估 actual 滞后, 仅显示) ---
+	rEnvUpBuf_O : ARRAY[0..1999] OF REAL; // 命令相位上包络环形缓冲 (索引=iPointIndex; 上界=ENV_MAXPPC-1)
+	rEnvLoBuf_O : ARRAY[0..1999] OF REAL; // 命令相位下包络环形缓冲
+	rEnvActBin_O : ARRAY[0..99] OF REAL;  // 本周期 actual 相位分箱累加 (ENV_NCORR 箱)
+	rEnvCmdBin_O : ARRAY[0..99] OF REAL;  // 本周期指令 相位分箱累加
+	iEnvBinCnt_O : ARRAY[0..99] OF INT;   // 各分箱采样计数
+	rEnvLag_O : REAL;      // 平滑后的 actual 滞后 (周期占比 0~1)
+	iEnvKDelay_O : INT;    // 显示延迟 = round(rEnvLag·N) 个采样
+	iEnvN_O : INT; iEnvIdx_O : INT; iEnvBin_O : INT; iEnvRd_O : INT; // 互相关临时量
+	iEnvK_O : INT; iEnvB_O : INT; iEnvBestK_O : INT;
+	rEnvCorr_O : REAL; rEnvBestCorr_O : REAL; rEnvMeanA_O : REAL; rEnvMeanC_O : REAL;
+	rEnvLagNew_O : REAL;
 END_VAR
+VAR CONSTANT
+	ENV_MAXPPC    : INT  := 2000; // 显示延迟缓冲容量 (支持最低 ~0.5Hz @1ms; 须与数组上界 1999 一致)
+	ENV_NCORR     : INT  := 100;  // 互相关相位分箱数 (要求每周期点数 ≥ 此值; 须与数组上界 99 一致)
+	ENV_KMAX      : INT  := 25;   // 互相关搜索的最大滞后 (分箱数, = 25% 周期)
+	ENV_LAGSMOOTH : REAL := 0.3;  // 滞后估计的逐周期指数平滑系数
 
 {*
 26.01为剂侧产品端低压力传感器
@@ -212,9 +229,95 @@ CASE iState OF
 
     GVL_PulsePressure.PP_Oil_SetpointPressure := fbWaveGen_O.rTarget;
 
-    // 包络输出 → GVL (供 HMI 绘制 ARP1383C 容差带)
-    GVL_PulsePressure.PP_Oil_TargetUpper := fbWaveGen_O.rTargetUpper;
-    GVL_PulsePressure.PP_Oil_TargetLower := fbWaveGen_O.rTargetLower;
+    // ============================================================
+    // ARP1383C 显示包络相位对齐 (仅显示, 不影响 ILC)
+    // 实际压力相对指令有稳态滞后; 若把命令相位包络直接送 HMI, "形状/
+    // 幅值合格但有滞后"的实际曲线会在边沿被画成越界。这里用整周期互
+    // 相关在线估 actual 相对指令的滞后, 把命令相位包络在时间上延迟同
+    // 样的量后送 HMI, 使容差带套住实际曲线。ILC 仍用命令相位包络
+    // (fbWaveGen_O.rTargetUpper/Lower, 见下方调用), 继续主动消除滞后,
+    // 控制行为不变。
+    // 算法: 每周期把 actual / 指令按相位分箱 (ENV_NCORR 箱); 周期边界
+    //       对两条均值曲线做去均值互相关, 取相关最大的整数滞后 kbest
+    //       → 滞后占比 kbest/ENV_NCORR, 逐周期指数平滑; 显示包络 = 命令
+    //       相位包络环形缓冲中延迟 round(lag·N) 个采样的值。
+    // ============================================================
+    iEnvN_O   := fbWaveGen_O.iPointsPerCycle;
+    iEnvIdx_O := fbWaveGen_O.iPointIndex;
+
+    IF fbWaveGen_O.bNewCycle THEN
+        IF (iEnvN_O >= ENV_NCORR) AND (iEnvN_O <= ENV_MAXPPC) THEN
+            // 分箱取均值 + 总体均值 (去均值用)
+            rEnvMeanA_O := 0.0;
+            rEnvMeanC_O := 0.0;
+            FOR iEnvB_O := 0 TO ENV_NCORR - 1 DO
+                IF iEnvBinCnt_O[iEnvB_O] > 0 THEN
+                    rEnvActBin_O[iEnvB_O] := rEnvActBin_O[iEnvB_O] / INT_TO_REAL(iEnvBinCnt_O[iEnvB_O]);
+                    rEnvCmdBin_O[iEnvB_O] := rEnvCmdBin_O[iEnvB_O] / INT_TO_REAL(iEnvBinCnt_O[iEnvB_O]);
+                END_IF
+                rEnvMeanA_O := rEnvMeanA_O + rEnvActBin_O[iEnvB_O];
+                rEnvMeanC_O := rEnvMeanC_O + rEnvCmdBin_O[iEnvB_O];
+            END_FOR
+            rEnvMeanA_O := rEnvMeanA_O / INT_TO_REAL(ENV_NCORR);
+            rEnvMeanC_O := rEnvMeanC_O / INT_TO_REAL(ENV_NCORR);
+
+            // 去均值互相关, 搜索 k = 0..ENV_KMAX (actual 滞后 ⇒ 命令回移 k 对齐)
+            iEnvBestK_O    := 0;
+            rEnvBestCorr_O := -1.0E30;
+            FOR iEnvK_O := 0 TO ENV_KMAX DO
+                rEnvCorr_O := 0.0;
+                FOR iEnvB_O := 0 TO ENV_NCORR - 1 DO
+                    iEnvRd_O := iEnvB_O - iEnvK_O;
+                    IF iEnvRd_O < 0 THEN iEnvRd_O := iEnvRd_O + ENV_NCORR; END_IF
+                    rEnvCorr_O := rEnvCorr_O
+                        + (rEnvActBin_O[iEnvB_O] - rEnvMeanA_O)
+                        * (rEnvCmdBin_O[iEnvRd_O] - rEnvMeanC_O);
+                END_FOR
+                IF rEnvCorr_O > rEnvBestCorr_O THEN
+                    rEnvBestCorr_O := rEnvCorr_O;
+                    iEnvBestK_O    := iEnvK_O;
+                END_IF
+            END_FOR
+
+            rEnvLagNew_O := INT_TO_REAL(iEnvBestK_O) / INT_TO_REAL(ENV_NCORR);
+            rEnvLag_O    := rEnvLag_O + ENV_LAGSMOOTH * (rEnvLagNew_O - rEnvLag_O);
+            iEnvKDelay_O := REAL_TO_INT(rEnvLag_O * INT_TO_REAL(iEnvN_O));
+            IF iEnvKDelay_O < 0 THEN iEnvKDelay_O := 0; END_IF
+            IF iEnvKDelay_O > iEnvN_O - 1 THEN iEnvKDelay_O := iEnvN_O - 1; END_IF
+        ELSE
+            rEnvLag_O    := 0.0;   // N 超范围: 退化为命令相位包络
+            iEnvKDelay_O := 0;
+        END_IF
+        // 清空分箱, 开始累计新周期
+        FOR iEnvB_O := 0 TO ENV_NCORR - 1 DO
+            rEnvActBin_O[iEnvB_O] := 0.0;
+            rEnvCmdBin_O[iEnvB_O] := 0.0;
+            iEnvBinCnt_O[iEnvB_O] := 0;
+        END_FOR
+    END_IF
+
+    // 本采样: 写命令相位包络环形缓冲 + 按相位分箱累加 actual/指令; 输出延迟后的显示包络
+    IF (iEnvN_O >= ENV_NCORR) AND (iEnvN_O <= ENV_MAXPPC)
+       AND (iEnvIdx_O >= 0) AND (iEnvIdx_O < iEnvN_O) THEN
+        rEnvUpBuf_O[iEnvIdx_O] := fbWaveGen_O.rTargetUpper;
+        rEnvLoBuf_O[iEnvIdx_O] := fbWaveGen_O.rTargetLower;
+        iEnvBin_O := REAL_TO_INT(INT_TO_REAL(iEnvIdx_O) * INT_TO_REAL(ENV_NCORR) / INT_TO_REAL(iEnvN_O) - 0.5);
+        IF iEnvBin_O < 0 THEN iEnvBin_O := 0; END_IF
+        IF iEnvBin_O > ENV_NCORR - 1 THEN iEnvBin_O := ENV_NCORR - 1; END_IF
+        rEnvActBin_O[iEnvBin_O] := rEnvActBin_O[iEnvBin_O] + GVL_PulsePressure.PP_Oil_ActualPressure;
+        rEnvCmdBin_O[iEnvBin_O] := rEnvCmdBin_O[iEnvBin_O] + fbWaveGen_O.rTarget;
+        iEnvBinCnt_O[iEnvBin_O] := iEnvBinCnt_O[iEnvBin_O] + 1;
+
+        iEnvRd_O := iEnvIdx_O - iEnvKDelay_O;
+        IF iEnvRd_O < 0 THEN iEnvRd_O := iEnvRd_O + iEnvN_O; END_IF
+        GVL_PulsePressure.PP_Oil_TargetUpper := rEnvUpBuf_O[iEnvRd_O];
+        GVL_PulsePressure.PP_Oil_TargetLower := rEnvLoBuf_O[iEnvRd_O];
+    ELSE
+        GVL_PulsePressure.PP_Oil_TargetUpper := fbWaveGen_O.rTargetUpper;
+        GVL_PulsePressure.PP_Oil_TargetLower := fbWaveGen_O.rTargetLower;
+    END_IF
+
+    GVL_PulsePressure.PP_Oil_EnvPhaseLag  := rEnvLag_O * 100.0;  // actual 滞后 (周期 %), 仅显示遥测
 
     GVL_PulsePressure.PP_Oil_WavePhase    := fbWaveGen_O.rPhase * 360.0;
     GVL_PulsePressure.PP_Oil_Frequency_FB := GVL_PulsePressure.PP_Oil_Frequency;
