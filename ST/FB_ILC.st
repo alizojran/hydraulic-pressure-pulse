@@ -11,7 +11,6 @@ VAR_INPUT
 	rLearningRate   : REAL := 0.3;   // 端点学习率
 	rAlphaLR        : REAL := 0.2;   // α 学习率（正弦 8 段、梯形 12 段）
 	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（仅正弦 8 段; 梯形形态由 bTrapShapeEnable 控制）
-	bPlatCorrEnable : BOOL := TRUE;  // 平台 2 段幅值修正使能（仅梯形, 且需 bTrapShapeEnable=TRUE 才生效）
 	bTrapShapeEnable : BOOL := FALSE; // 梯形形态补偿使能(α-12 时序重映射 + 平台幅值修正); 默认 FALSE = 仅端点补偿(rVMin/rVMax 重映射)
 	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正
 	iWaveTypeIn     : INT  := 0;     // 波形类型 (与 FB_WaveformGen 同编码): 0=正弦 1=梯形 2=水锤波; 其他值按正弦处理
@@ -38,15 +37,6 @@ VAR_OUTPUT
 	rAlphaCmd      : ARRAY [1..8] OF REAL;
 	rAlphaTgt      : ARRAY [1..8] OF REAL;
 	rAlphaFb       : ARRAY [1..8] OF REAL;
-	// 12 段 α 时长占比（梯形：底平 / 升 1..5 / 顶平 / 降 1..5）
-	rAlpha12Cmd    : ARRAY [1..12] OF REAL;
-	rAlpha12Tgt    : ARRAY [1..12] OF REAL;
-	rAlpha12Fb     : ARRAY [1..12] OF REAL;
-	// 梯形：平台分 2 段幅值修正（MPa，叠加在 vMin/vMax 上）
-	rPlatBotA      : REAL;
-	rPlatBotB      : REAL;
-	rPlatTopA      : REAL;
-	rPlatTopB      : REAL;
 	// 水锤波 3 级端点学习 (除 rVMin/rVMax 外, 额外学习过冲峰指令)
 	rVPeak         : REAL;           // 水锤过冲峰指令 (MPa) — 让 actual 抵达 P_OS
 	rWHHoldActual  : REAL;           // 上周期 PMax 保压段 actual 均值 (诊断)
@@ -81,27 +71,6 @@ VAR
 	iTgtBin          : ARRAY [1..8] OF INT;
 	iFbBin           : ARRAY [1..8] OF INT;
 	iBinTotal        : INT;
-	// 12 段 α 状态
-	iTgtBin12        : ARRAY [1..12] OF INT;
-	iFbBin12         : ARRAY [1..12] OF INT;
-	iBinTotal12      : INT;
-	// 平台 2 段反馈累加（按 cmd phase 切割）
-	rFbSumBotA       : REAL;
-	rFbSumBotB       : REAL;
-	rFbSumTopA       : REAL;
-	rFbSumTopB       : REAL;
-	iCntBotA         : INT;
-	iCntBotB         : INT;
-	iCntTopA         : INT;
-	iCntTopB         : INT;
-	// cmd 平台 phase 边界缓存（每周期边界更新一次）
-	rT1Cached        : REAL;
-	rT6Cached        : REAL;
-	rT7Cached        : REAL;
-	rBotMidPhase     : REAL;
-	rTopMidPhase     : REAL;
-	rFbAvg           : REAL;
-	rPlatCorrLimit   : REAL;
 	rTargetPrev      : REAL;
 	bTgtRising       : BOOL;
 	rActualPrev      : REAL;
@@ -117,15 +86,6 @@ VAR
 	rT5              : REAL;
 	rT6              : REAL;
 	rT7              : REAL;
-	rT8              : REAL;
-	rT9              : REAL;
-	rT10             : REAL;
-	rT11             : REAL;
-	rBand1           : REAL;
-	rBand2           : REAL;
-	rBand3           : REAL;
-	rBand4           : REAL;
-	rPlateauThr      : REAL;
 	rDelta           : REAL;
 	rPhi             : REAL;
 	rPhiStd          : REAL;
@@ -162,13 +122,6 @@ END_VAR
 VAR CONSTANT
 	ALPHA_Q_MIN       : REAL := 0.04;
 	ALPHA_Q_MAX       : REAL := 0.35;
-	ALPHA12_Q_MIN     : REAL := 0.02;
-	ALPHA12_Q_MAX     : REAL := 0.45;
-	PLATEAU_BAND_K    : REAL := 0.7;     // 平台判定带：|y - mid| > K * halfRange
-	PLAT_CORR_LR      : REAL := 0.3;     // 平台幅值修正学习率
-	PLAT_CORR_LIMIT_K : REAL := 0.3;     // 平台幅值修正上限：0.3 * halfRange
-	PLAT_TGT_MIN_FRAC : REAL := 0.03;    // 目标平台占比阈值：低于此值视为"没有平台"，跳过修正学习
-	PLAT_CORR_DECAY   : REAL := 0.9;     // 跳过学习时的修正衰减系数
 	TWO_PI            : REAL := 6.283185307;
 	CYCLES_PER_UPDATE : INT  := 2;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
@@ -206,14 +159,6 @@ IF bReset OR NOT bEnable THEN
             rAlphaTgt[iBinK] := 0.125;
             rAlphaFb[iBinK]  := 0.125;
         END_FOR
-        // 12 段 α 默认均分（1/12 ≈ 0.08333）
-        FOR iBinK := 1 TO 12 DO
-            rAlpha12Cmd[iBinK] := 0.08333;
-            rAlpha12Tgt[iBinK] := 0.08333;
-            rAlpha12Fb[iBinK]  := 0.08333;
-        END_FOR
-        rPlatBotA := 0.0; rPlatBotB := 0.0;
-        rPlatTopA := 0.0; rPlatTopB := 0.0;
         rVPeak := 0.0;
         rWHHoldActual := 0.0;
         rWHLowActual  := 0.0;
@@ -233,15 +178,6 @@ IF bReset OR NOT bEnable THEN
         iTgtBin[iBinK] := 0;
         iFbBin[iBinK]  := 0;
     END_FOR
-    FOR iBinK := 1 TO 12 DO
-        iTgtBin12[iBinK] := 0;
-        iFbBin12[iBinK]  := 0;
-    END_FOR
-    iBinTotal12    := 0;
-    rFbSumBotA := 0.0; rFbSumBotB := 0.0;
-    rFbSumTopA := 0.0; rFbSumTopB := 0.0;
-    iCntBotA := 0; iCntBotB := 0;
-    iCntTopA := 0; iCntTopB := 0;
     rWHOSPeakActual := -1.0E30;
     rWHHoldSum := 0.0; iWHHoldCount := 0;
     rWHLowSum  := 0.0; iWHLowCount  := 0;
@@ -332,20 +268,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     END_FOR
     iBinTotal := 0;
 
-    // 12 段分布归一
-    IF iBinTotal12 > 0 THEN
-        rBinTotal := INT_TO_REAL(iBinTotal12);
-        FOR iBinK := 1 TO 12 DO
-            rAlpha12Tgt[iBinK] := INT_TO_REAL(iTgtBin12[iBinK]) / rBinTotal;
-            rAlpha12Fb[iBinK]  := INT_TO_REAL(iFbBin12[iBinK])  / rBinTotal;
-        END_FOR
-    END_IF
-    FOR iBinK := 1 TO 12 DO
-        iTgtBin12[iBinK] := 0;
-        iFbBin12[iBinK]  := 0;
-    END_FOR
-    iBinTotal12 := 0;
-
     // 端点误差
     rPeakError   := rTargetMax - rActualMax;
     rValleyError := rTargetMin - rActualMin;
@@ -405,68 +327,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                         rAlphaCmd[iBinK] := rAlphaCmd[iBinK] / rAlphaSum;
                     END_FOR
                 END_IF
-            END_IF
-
-            // α 12 段自学习 (梯形 nWaveType=1)
-            IF bTrapShapeEnable AND nWaveType = 1 THEN
-                FOR iBinK := 1 TO 12 DO
-                    rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK]
-                                       + rAlphaLR * (rAlpha12Tgt[iBinK] - rAlpha12Fb[iBinK]);
-                    IF rAlpha12Cmd[iBinK] < ALPHA12_Q_MIN THEN rAlpha12Cmd[iBinK] := ALPHA12_Q_MIN; END_IF
-                    IF rAlpha12Cmd[iBinK] > ALPHA12_Q_MAX THEN rAlpha12Cmd[iBinK] := ALPHA12_Q_MAX; END_IF
-                END_FOR
-                rAlphaSum := 0.0;
-                FOR iBinK := 1 TO 12 DO
-                    rAlphaSum := rAlphaSum + rAlpha12Cmd[iBinK];
-                END_FOR
-                IF rAlphaSum > 0.001 THEN
-                    FOR iBinK := 1 TO 12 DO
-                        rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK] / rAlphaSum;
-                    END_FOR
-                END_IF
-            END_IF
-
-            // 平台分 2 段幅值修正学习 (梯形 nWaveType=1)
-            // 双门控：目标平台时间占比 < 3% → 跳过并衰减；样本不足 → 跳过
-            IF bTrapShapeEnable AND bPlatCorrEnable AND nWaveType = 1 THEN
-                // 顶部平台
-                IF rAlpha12Tgt[7] >= PLAT_TGT_MIN_FRAC THEN
-                    IF iCntTopA >= 2 THEN
-                        rFbAvg := rFbSumTopA / INT_TO_REAL(iCntTopA);
-                        rPlatTopA := rPlatTopA + PLAT_CORR_LR * (rPrevTargetMax - rFbAvg);
-                    END_IF
-                    IF iCntTopB >= 2 THEN
-                        rFbAvg := rFbSumTopB / INT_TO_REAL(iCntTopB);
-                        rPlatTopB := rPlatTopB + PLAT_CORR_LR * (rPrevTargetMax - rFbAvg);
-                    END_IF
-                ELSE
-                    rPlatTopA := rPlatTopA * PLAT_CORR_DECAY;
-                    rPlatTopB := rPlatTopB * PLAT_CORR_DECAY;
-                END_IF
-                // 底部平台
-                IF rAlpha12Tgt[1] >= PLAT_TGT_MIN_FRAC THEN
-                    IF iCntBotA >= 2 THEN
-                        rFbAvg := rFbSumBotA / INT_TO_REAL(iCntBotA);
-                        rPlatBotA := rPlatBotA + PLAT_CORR_LR * (rPrevTargetMin - rFbAvg);
-                    END_IF
-                    IF iCntBotB >= 2 THEN
-                        rFbAvg := rFbSumBotB / INT_TO_REAL(iCntBotB);
-                        rPlatBotB := rPlatBotB + PLAT_CORR_LR * (rPrevTargetMin - rFbAvg);
-                    END_IF
-                ELSE
-                    rPlatBotA := rPlatBotA * PLAT_CORR_DECAY;
-                    rPlatBotB := rPlatBotB * PLAT_CORR_DECAY;
-                END_IF
-                // 限幅
-                rPlatCorrLimit := PLAT_CORR_LIMIT_K * rHalfRange;
-                IF rPlatTopA >  rPlatCorrLimit THEN rPlatTopA :=  rPlatCorrLimit; END_IF
-                IF rPlatTopA < -rPlatCorrLimit THEN rPlatTopA := -rPlatCorrLimit; END_IF
-                IF rPlatTopB >  rPlatCorrLimit THEN rPlatTopB :=  rPlatCorrLimit; END_IF
-                IF rPlatTopB < -rPlatCorrLimit THEN rPlatTopB := -rPlatCorrLimit; END_IF
-                IF rPlatBotA >  rPlatCorrLimit THEN rPlatBotA :=  rPlatCorrLimit; END_IF
-                IF rPlatBotA < -rPlatCorrLimit THEN rPlatBotA := -rPlatCorrLimit; END_IF
-                IF rPlatBotB >  rPlatCorrLimit THEN rPlatBotB :=  rPlatCorrLimit; END_IF
-                IF rPlatBotB < -rPlatCorrLimit THEN rPlatBotB := -rPlatCorrLimit; END_IF
             END_IF
 
             // 端点幅值自学习（加法型）：水锤波由专用 3 级学习处理, 跳过通用路径
@@ -545,16 +405,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         END_IF
     END_IF
 
-    // 缓存梯形平台 phase 边界（per-sample 与输出阶段共用）
-    IF nWaveType = 1 THEN
-        rT1Cached    := rAlpha12Cmd[1];
-        rT6Cached    := rT1Cached + rAlpha12Cmd[2] + rAlpha12Cmd[3]
-                     + rAlpha12Cmd[4] + rAlpha12Cmd[5] + rAlpha12Cmd[6];
-        rT7Cached    := rT6Cached + rAlpha12Cmd[7];
-        rBotMidPhase := rT1Cached * 0.5;
-        rTopMidPhase := (rT6Cached + rT7Cached) * 0.5;
-    END_IF
-
     // 缓存水锤波 5 段边界 (累积归一化相位; 上游已保证 sum = 1)
     IF nWaveType = 2 THEN
         rWH_T1 := rWHRiseFrac;
@@ -578,11 +428,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         END_FOR
     END_IF
 
-    // 复位平台 2 段反馈累加
-    rFbSumBotA := 0.0; rFbSumBotB := 0.0;
-    rFbSumTopA := 0.0; rFbSumTopB := 0.0;
-    iCntBotA := 0; iCntBotB := 0;
-    iCntTopA := 0; iCntTopB := 0;
 
 END_IF
 
@@ -664,62 +509,6 @@ IF (nWaveType = 0) AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
     iFbBin[iBinK] := iFbBin[iBinK] + 1;
 END_IF
 
-// --------- 12 段分箱（梯形）---------
-// 1=底平; 2..6=升 5 子段（自下而上）; 7=顶平; 8..12=降 5 子段（自上而下）
-// 斜坡振幅区间 [-PLATEAU_BAND_K, +PLATEAU_BAND_K]·hR 五等分
-IF (nWaveType = 1) AND iIterCount >= 1 AND rHalfRange > 0.001 THEN
-    iBinTotal12 := iBinTotal12 + 1;
-    rPlateauThr := PLATEAU_BAND_K * rHalfRange;
-    rBand1 := -0.6 * rPlateauThr;   // = -0.42 hR
-    rBand2 := -0.2 * rPlateauThr;   // = -0.14 hR
-    rBand3 :=  0.2 * rPlateauThr;   // = +0.14 hR
-    rBand4 :=  0.6 * rPlateauThr;   // = +0.42 hR
-
-    rTgtPos := rTargetRaw - rMidpoint;
-    IF rTgtPos < -rPlateauThr THEN
-        iBinK := 1;
-    ELSIF rTgtPos > rPlateauThr THEN
-        iBinK := 7;
-    ELSIF bTgtRising THEN
-        IF      rTgtPos < rBand1 THEN iBinK := 2;
-        ELSIF   rTgtPos < rBand2 THEN iBinK := 3;
-        ELSIF   rTgtPos < rBand3 THEN iBinK := 4;
-        ELSIF   rTgtPos < rBand4 THEN iBinK := 5;
-        ELSE                          iBinK := 6;
-        END_IF
-    ELSE
-        IF      rTgtPos > rBand4 THEN iBinK := 8;
-        ELSIF   rTgtPos > rBand3 THEN iBinK := 9;
-        ELSIF   rTgtPos > rBand2 THEN iBinK := 10;
-        ELSIF   rTgtPos > rBand1 THEN iBinK := 11;
-        ELSE                          iBinK := 12;
-        END_IF
-    END_IF
-    iTgtBin12[iBinK] := iTgtBin12[iBinK] + 1;
-
-    rFbPos := rActual - rMidpoint;
-    IF rFbPos < -rPlateauThr THEN
-        iBinK := 1;
-    ELSIF rFbPos > rPlateauThr THEN
-        iBinK := 7;
-    ELSIF bFbRising THEN
-        IF      rFbPos < rBand1 THEN iBinK := 2;
-        ELSIF   rFbPos < rBand2 THEN iBinK := 3;
-        ELSIF   rFbPos < rBand3 THEN iBinK := 4;
-        ELSIF   rFbPos < rBand4 THEN iBinK := 5;
-        ELSE                         iBinK := 6;
-        END_IF
-    ELSE
-        IF      rFbPos > rBand4 THEN iBinK := 8;
-        ELSIF   rFbPos > rBand3 THEN iBinK := 9;
-        ELSIF   rFbPos > rBand2 THEN iBinK := 10;
-        ELSIF   rFbPos > rBand1 THEN iBinK := 11;
-        ELSE                         iBinK := 12;
-        END_IF
-    END_IF
-    iFbBin12[iBinK] := iFbBin12[iBinK] + 1;
-END_IF
-
 // --------- 水锤波 per-segment 反馈累加（按归一化相位切割）---------
 // 段 1: 跟踪 actual 峰 (供 rVPeak 学习, 抵达 P_OS)
 // 段 2: ring 过渡, 不学习
@@ -753,27 +542,6 @@ IF bTrapShapeEnable AND nWaveType = 1 AND iIterCount >= 1 AND rEnvUpper > rEnvLo
     END_IF
     rShapeOobSum[iShapeSeg] := rShapeOobSum[iShapeSeg] + rShapeOob;
     iShapeCnt[iShapeSeg]    := iShapeCnt[iShapeSeg] + 1;
-END_IF
-
-// --------- 平台 2 段反馈累加（按 cmd phase 切割）---------
-IF (nWaveType = 1) AND iIterCount >= 1 THEN
-    IF rPhi < rT1Cached AND rT1Cached > 0.001 THEN
-        IF rPhi < rBotMidPhase THEN
-            rFbSumBotA := rFbSumBotA + rActual;
-            iCntBotA   := iCntBotA + 1;
-        ELSE
-            rFbSumBotB := rFbSumBotB + rActual;
-            iCntBotB   := iCntBotB + 1;
-        END_IF
-    ELSIF rPhi >= rT6Cached AND rPhi < rT7Cached AND (rT7Cached - rT6Cached) > 0.001 THEN
-        IF rPhi < rTopMidPhase THEN
-            rFbSumTopA := rFbSumTopA + rActual;
-            iCntTopA   := iCntTopA + 1;
-        ELSE
-            rFbSumTopB := rFbSumTopB + rActual;
-            iCntTopB   := iCntTopB + 1;
-        END_IF
-    END_IF
 END_IF
 
 // ============================================================
@@ -857,72 +625,8 @@ ELSIF nWaveType = 2 THEN
     RETURN;
 
 ELSIF nWaveType = 1 THEN
-    // 梯形：端点补偿(下方仿射重映射到 [vMin,vMax]); 形态补偿改为末尾按上下包络逐段叠加 rShapeCorr
-    // 注: 下面 IF FALSE 内为(已停用)的 α-12 时序重映射, 大滞后下会把虚拟指令推移≈半周期致反相, 不再使用
-    IF FALSE THEN
-    // 模板（标准振幅 0..1）：
-    //   底平(0) → 升 0→0.2→0.4→0.6→0.8→1 → 顶平(1) → 降 1→0.8→0.6→0.4→0.2→0
-    rT1  := rAlpha12Cmd[1];
-    rT2  := rT1  + rAlpha12Cmd[2];
-    rT3  := rT2  + rAlpha12Cmd[3];
-    rT4  := rT3  + rAlpha12Cmd[4];
-    rT5  := rT4  + rAlpha12Cmd[5];
-    rT6  := rT5  + rAlpha12Cmd[6];
-    rT7  := rT6  + rAlpha12Cmd[7];
-    rT8  := rT7  + rAlpha12Cmd[8];
-    rT9  := rT8  + rAlpha12Cmd[9];
-    rT10 := rT9  + rAlpha12Cmd[10];
-    rT11 := rT10 + rAlpha12Cmd[11];
-
-    IF rPhi < rT1 THEN
-        rWarpedY := 0.0;
-    ELSIF rPhi < rT2 THEN
-        rDelta := rT2 - rT1;
-        IF rDelta > 0.001 THEN rWarpedY := (rPhi - rT1) / rDelta * 0.2;
-        ELSE rWarpedY := 0.1; END_IF
-    ELSIF rPhi < rT3 THEN
-        rDelta := rT3 - rT2;
-        IF rDelta > 0.001 THEN rWarpedY := 0.2 + (rPhi - rT2) / rDelta * 0.2;
-        ELSE rWarpedY := 0.3; END_IF
-    ELSIF rPhi < rT4 THEN
-        rDelta := rT4 - rT3;
-        IF rDelta > 0.001 THEN rWarpedY := 0.4 + (rPhi - rT3) / rDelta * 0.2;
-        ELSE rWarpedY := 0.5; END_IF
-    ELSIF rPhi < rT5 THEN
-        rDelta := rT5 - rT4;
-        IF rDelta > 0.001 THEN rWarpedY := 0.6 + (rPhi - rT4) / rDelta * 0.2;
-        ELSE rWarpedY := 0.7; END_IF
-    ELSIF rPhi < rT6 THEN
-        rDelta := rT6 - rT5;
-        IF rDelta > 0.001 THEN rWarpedY := 0.8 + (rPhi - rT5) / rDelta * 0.2;
-        ELSE rWarpedY := 0.9; END_IF
-    ELSIF rPhi < rT7 THEN
-        rWarpedY := 1.0;
-    ELSIF rPhi < rT8 THEN
-        rDelta := rT8 - rT7;
-        IF rDelta > 0.001 THEN rWarpedY := 1.0 - (rPhi - rT7) / rDelta * 0.2;
-        ELSE rWarpedY := 0.9; END_IF
-    ELSIF rPhi < rT9 THEN
-        rDelta := rT9 - rT8;
-        IF rDelta > 0.001 THEN rWarpedY := 0.8 - (rPhi - rT8) / rDelta * 0.2;
-        ELSE rWarpedY := 0.7; END_IF
-    ELSIF rPhi < rT10 THEN
-        rDelta := rT10 - rT9;
-        IF rDelta > 0.001 THEN rWarpedY := 0.6 - (rPhi - rT9) / rDelta * 0.2;
-        ELSE rWarpedY := 0.5; END_IF
-    ELSIF rPhi < rT11 THEN
-        rDelta := rT11 - rT10;
-        IF rDelta > 0.001 THEN rWarpedY := 0.4 - (rPhi - rT10) / rDelta * 0.2;
-        ELSE rWarpedY := 0.3; END_IF
-    ELSE
-        rDelta := 1.0 - rT11;
-        IF rDelta > 0.001 THEN rWarpedY := 0.2 - (rPhi - rT11) / rDelta * 0.2;
-        ELSE rWarpedY := 0.1; END_IF
-    END_IF
-    rSourceTarget := rPrevTargetMin + rWarpedY * rPrevTargetRange;
-    ELSE
-        rSourceTarget := rTargetRaw;   // 仅端点补偿: 保留原指令形状, 由下方仿射重映射缩放到 [vMin,vMax]
-    END_IF
+    // 梯形：端点补偿(仿射重映射到 [vMin,vMax]) + 末尾按上下包络逐段叠加 rShapeCorr 形态修正
+    rSourceTarget := rTargetRaw;
 
 ELSE
     rSourceTarget := rTargetRaw;
