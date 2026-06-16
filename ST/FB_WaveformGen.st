@@ -11,6 +11,7 @@ VAR_INPUT
 	rOvershoot : REAL; // 水锤波过冲峰倍数: P_OS = rOvershoot×PMax (rPMax 即 P_Oper); 写 <1 视为无效, 按 ARP1383C 3.1 取 1.5
 	rRingPct : REAL; // 水锤波过冲后稳定段占比 (指令直接给PMax)，默认0.07
 	rLowDwellPct : REAL; // 水锤波低保持段占比，默认0.48 (5段相对权重，内部归一化)
+	rRiseRate : REAL := 0.0; // 水锤上升速率 (MPa/s); >0 时上升段按此速率生成斜坡(段宽=ΔP/速率×频率); ≤0 用 rRisePct 占比
 	rDt : REAL; // 控制周期 (s)
 	bReset : BOOL; // 复位相位
 	nMffLeadSteps : INT; // MFF超前步数: 提前N步计算目标值给MFF使用
@@ -144,30 +145,48 @@ CASE iWaveType OF
     rRing := 0.0;
     rPeakOS := rPMax;
 
-2:  // 水锤：5 段相对权重，强制 sum = 1
-    rR := rRisePct;
+2:  // 水锤：上升段斜坡到 P_OS, 段宽可由"上升速率"定; 其余 4 段相对权重填满
+    // 过冲峰 P_OS 先算 (上升速率换算相位宽时要用):
+    // ARP1383C 3.1: P_OS = 1.5×P_Oper (rPMax 即 P_Oper); 倍数可调, 写 <1 按 1.5
+    rOS := rOvershoot;
+    IF rOS < 1.0 THEN rOS := 1.5; END_IF
+    rPeakOS := rOS * rPMax;
+
     rRing := rRingPct;
     rH := rHoldPct;
     rF := rFallPct;
     rLow := rLowDwellPct;
-    IF rR < 0.01 THEN rR := 0.05; END_IF
     IF rRing < 0.01 THEN rRing := 0.07; END_IF
     IF rH < 0.01 THEN rH := 0.35; END_IF
     IF rF < 0.01 THEN rF := 0.05; END_IF
     IF rLow < 0.01 THEN rLow := 0.48; END_IF
-    rSum := rR + rRing + rH + rF + rLow;
-    IF rSum > 0.01 THEN
-        rR := rR / rSum;
-        rRing := rRing / rSum;
-        rH := rH / rSum;
-        rF := rF / rSum;
-        rLow := rLow / rSum;
+
+    IF rRiseRate > 0.0 THEN
+        // 上升段按速率定宽: t_rise = (P_OS - PMin)/速率[MPa/s]; 相位宽 = t_rise × 频率
+        rR := (rPeakOS - rPMin) / rRiseRate * rFrequency;
+        IF rR < 0.002 THEN rR := 0.002; END_IF   // 速率过快 → 近似阶跃 (下限保护避免除零)
+        IF rR > 0.5   THEN rR := 0.5;   END_IF   // 速率过慢 → 上限钳到半周期
+        // 其余 4 段按相对权重填满剩余 (1 - rR)
+        rSum := rRing + rH + rF + rLow;
+        IF rSum > 0.01 THEN
+            rRing := rRing / rSum * (1.0 - rR);
+            rH    := rH    / rSum * (1.0 - rR);
+            rF    := rF    / rSum * (1.0 - rR);
+            rLow  := rLow  / rSum * (1.0 - rR);
+        END_IF
+    ELSE
+        // 速率未给 (≤0): 退回 5 段相对权重归一化 (上升段仍为斜坡, 宽度由 rRisePct 定)
+        rR := rRisePct;
+        IF rR < 0.01 THEN rR := 0.05; END_IF
+        rSum := rR + rRing + rH + rF + rLow;
+        IF rSum > 0.01 THEN
+            rR    := rR    / rSum;
+            rRing := rRing / rSum;
+            rH    := rH    / rSum;
+            rF    := rF    / rSum;
+            rLow  := rLow  / rSum;
+        END_IF
     END_IF
-    // ARP1383C 3.1: 过冲峰 P_OS = 1.5×P_Oper (rPMax 即 P_Oper);
-    // 倍数可调 (如回油腔 PR_Max = 1.5×PR 亦为 1.5), 写 <1 无效按 1.5
-    rOS := rOvershoot;
-    IF rOS < 1.0 THEN rOS := 1.5; END_IF
-    rPeakOS := rOS * rPMax;
 
 ELSE
     // 正弦无段：把变量清成无害默认值

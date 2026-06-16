@@ -131,7 +131,11 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Oil_EnvPctT := TwoWord_to_Float.Output;            // 76-77: (已废弃) 原包络时间容差, 不参与计算, 地址保留
 i := i + 2;
 
-// 78-95: 保留 (9 字段)
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_WHRiseRate := TwoWord_to_Float.Output;         // 78-79: 水锤上升速率 (MPa/s, >0 启用斜坡上升; ≤0 用 RisePct 占比)
+i := i + 2;
+
+// 80-95: 保留 (8 字段)
 
 
 // ===== [D] 控制器: ILC + PID (96-127) =====

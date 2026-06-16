@@ -19,6 +19,7 @@ VAR_GLOBAL
 	PP_Oil_Overshoot : REAL; // 油路水锤波过冲峰倍数: P_OS = 倍数×P_Oper (ARP1383C 3.1 标准 1.5; 写<1按1.5)
 	PP_Oil_RingPct : REAL; // 油路水锤波过冲后稳定段占比(默认0.07)，指令直接给PMax
 	PP_Oil_LowDwellPct : REAL; // 油路水锤波低保持段时间占比(默认0.48)，5段相对权重内部归一化
+	PP_Oil_WHRiseRate : REAL; // 油路水锤上升速率(MPa/s); >0 时上升段按此速率生成斜坡到P_OS; ≤0 用RisePct占比
 	PP_Oil_HighLimit : REAL; // 油路高压保护限值(MPa)
 	PP_Oil_TargetCycles : REAL; // 目标循环次数
 	PP_Oil_ILC_Enable : REAL; // 油路迭代学习控制使能

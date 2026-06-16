@@ -178,6 +178,11 @@
               <REAL />
             </type>
           </variable>
+          <variable name="PP_Oil_WHRiseRate">
+            <type>
+              <REAL />
+            </type>
+          </variable>
           <variable name="PP_Oil_HighLimit">
             <type>
               <REAL />
@@ -1699,6 +1704,14 @@ j := j + 2;
                       <REAL />
                     </type>
                   </variable>
+                  <variable name="rRiseRate">
+                    <type>
+                      <REAL />
+                    </type>
+                    <initialValue>
+                      <simpleValue value="0.0" />
+                    </initialValue>
+                  </variable>
                   <variable name="rDt">
                     <type>
                       <REAL />
@@ -2082,30 +2095,48 @@ CASE iWaveType OF
     rRing := 0.0;
     rPeakOS := rPMax;
 
-2:  // 水锤：5 段相对权重，强制 sum = 1
-    rR := rRisePct;
+2:  // 水锤：上升段斜坡到 P_OS, 段宽可由"上升速率"定; 其余 4 段相对权重填满
+    // 过冲峰 P_OS 先算 (上升速率换算相位宽时要用):
+    // ARP1383C 3.1: P_OS = 1.5×P_Oper (rPMax 即 P_Oper); 倍数可调, 写 &lt;1 按 1.5
+    rOS := rOvershoot;
+    IF rOS &lt; 1.0 THEN rOS := 1.5; END_IF
+    rPeakOS := rOS * rPMax;
+
     rRing := rRingPct;
     rH := rHoldPct;
     rF := rFallPct;
     rLow := rLowDwellPct;
-    IF rR &lt; 0.01 THEN rR := 0.05; END_IF
     IF rRing &lt; 0.01 THEN rRing := 0.07; END_IF
     IF rH &lt; 0.01 THEN rH := 0.35; END_IF
     IF rF &lt; 0.01 THEN rF := 0.05; END_IF
     IF rLow &lt; 0.01 THEN rLow := 0.48; END_IF
-    rSum := rR + rRing + rH + rF + rLow;
-    IF rSum &gt; 0.01 THEN
-        rR := rR / rSum;
-        rRing := rRing / rSum;
-        rH := rH / rSum;
-        rF := rF / rSum;
-        rLow := rLow / rSum;
+
+    IF rRiseRate &gt; 0.0 THEN
+        // 上升段按速率定宽: t_rise = (P_OS - PMin)/速率[MPa/s]; 相位宽 = t_rise × 频率
+        rR := (rPeakOS - rPMin) / rRiseRate * rFrequency;
+        IF rR &lt; 0.002 THEN rR := 0.002; END_IF   // 速率过快 → 近似阶跃 (下限保护避免除零)
+        IF rR &gt; 0.5   THEN rR := 0.5;   END_IF   // 速率过慢 → 上限钳到半周期
+        // 其余 4 段按相对权重填满剩余 (1 - rR)
+        rSum := rRing + rH + rF + rLow;
+        IF rSum &gt; 0.01 THEN
+            rRing := rRing / rSum * (1.0 - rR);
+            rH    := rH    / rSum * (1.0 - rR);
+            rF    := rF    / rSum * (1.0 - rR);
+            rLow  := rLow  / rSum * (1.0 - rR);
+        END_IF
+    ELSE
+        // 速率未给 (≤0): 退回 5 段相对权重归一化 (上升段仍为斜坡, 宽度由 rRisePct 定)
+        rR := rRisePct;
+        IF rR &lt; 0.01 THEN rR := 0.05; END_IF
+        rSum := rR + rRing + rH + rF + rLow;
+        IF rSum &gt; 0.01 THEN
+            rR    := rR    / rSum;
+            rRing := rRing / rSum;
+            rH    := rH    / rSum;
+            rF    := rF    / rSum;
+            rLow  := rLow  / rSum;
+        END_IF
     END_IF
-    // ARP1383C 3.1: 过冲峰 P_OS = 1.5×P_Oper (rPMax 即 P_Oper);
-    // 倍数可调 (如回油腔 PR_Max = 1.5×PR 亦为 1.5), 写 &lt;1 无效按 1.5
-    rOS := rOvershoot;
-    IF rOS &lt; 1.0 THEN rOS := 1.5; END_IF
-    rPeakOS := rOS * rPMax;
 
 ELSE
     // 正弦无段：把变量清成无害默认值
@@ -3092,6 +3123,7 @@ CASE iState OF
         rOvershoot    := GVL_PulsePressure.PP_Oil_Overshoot,
         rRingPct      := GVL_PulsePressure.PP_Oil_RingPct,
         rLowDwellPct  := GVL_PulsePressure.PP_Oil_LowDwellPct,
+        rRiseRate     := GVL_PulsePressure.PP_Oil_WHRiseRate,
         rDt           := rDt,
         bReset        := FALSE,
         nMffLeadSteps := 0,    // 已移除 MFF, 不再需要超前相位
@@ -3506,7 +3538,11 @@ TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[
 GVL_PulsePressure.PP_Oil_EnvPctT := TwoWord_to_Float.Output;            // 76-77: (已废弃) 原包络时间容差, 不参与计算, 地址保留
 i := i + 2;
 
-// 78-95: 保留 (9 字段)
+TwoWord_to_Float(word_low := HOLDING_REGISTER[i], word_high := HOLDING_REGISTER[i+1]);
+GVL_PulsePressure.PP_Oil_WHRiseRate := TwoWord_to_Float.Output;         // 78-79: 水锤上升速率 (MPa/s, >0 启用斜坡上升; ≤0 用 RisePct 占比)
+i := i + 2;
+
+// 80-95: 保留 (8 字段)
 
 
 // ===== [D] 控制器: ILC + PID (96-127) =====
@@ -5465,11 +5501,16 @@ CASE iWaveType OF
         FN_PulseWave := rPMin;
     END_IF
 
-2:  // ARP1383C 水锤波 (过冲峰 / 过冲后稳定 / 保压 / 阶跃下降+低保持)
-    // 下降指令为阶跃直落 PMin (无斜率, Fig.2 典型波形垂直跌落);
-    // rF 不参与指令, 仅作包络的 5%C 自由下降窗宽, 泄压靠系统自然响应
+2:  // ARP1383C 水锤波 (上升斜坡到过冲峰 / 回 P_Oper / 保压 / 阶跃下降+低保持)
+    // 上升段: 从 PMin 按上升速率斜坡爬升到过冲峰 P_OS (rR = 速率换算的相位宽,
+    //   到峰即 ph=rR); 到峰后立刻回 P_Oper(PMax); 下降为阶跃直落 PMin
+    //   (rF 仅作包络自由窗, 泄压靠系统自然响应)
     IF rPhaseIn &lt; rR THEN
-        FN_PulseWave := rPeakOS;
+        IF rR &gt; 0.0001 THEN
+            FN_PulseWave := rPMin + (rPeakOS - rPMin) * (rPhaseIn / rR);   // 斜坡上升到 P_OS
+        ELSE
+            FN_PulseWave := rPeakOS;                                       // 宽度退化保护: 阶跃
+        END_IF
     ELSIF rPhaseIn &lt; (rR + rRing) THEN
         FN_PulseWave := rPMax;
     ELSIF rPhaseIn &lt; (rR + rRing + rH) THEN

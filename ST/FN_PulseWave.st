@@ -36,11 +36,16 @@ CASE iWaveType OF
         FN_PulseWave := rPMin;
     END_IF
 
-2:  // ARP1383C 水锤波 (过冲峰 / 过冲后稳定 / 保压 / 阶跃下降+低保持)
-    // 下降指令为阶跃直落 PMin (无斜率, Fig.2 典型波形垂直跌落);
-    // rF 不参与指令, 仅作包络的 5%C 自由下降窗宽, 泄压靠系统自然响应
+2:  // ARP1383C 水锤波 (上升斜坡到过冲峰 / 回 P_Oper / 保压 / 阶跃下降+低保持)
+    // 上升段: 从 PMin 按上升速率斜坡爬升到过冲峰 P_OS (rR = 速率换算的相位宽,
+    //   到峰即 ph=rR); 到峰后立刻回 P_Oper(PMax); 下降为阶跃直落 PMin
+    //   (rF 仅作包络自由窗, 泄压靠系统自然响应)
     IF rPhaseIn < rR THEN
-        FN_PulseWave := rPeakOS;
+        IF rR > 0.0001 THEN
+            FN_PulseWave := rPMin + (rPeakOS - rPMin) * (rPhaseIn / rR);   // 斜坡上升到 P_OS
+        ELSE
+            FN_PulseWave := rPeakOS;                                       // 宽度退化保护: 阶跃
+        END_IF
     ELSIF rPhaseIn < (rR + rRing) THEN
         FN_PulseWave := rPMax;
     ELSIF rPhaseIn < (rR + rRing + rH) THEN

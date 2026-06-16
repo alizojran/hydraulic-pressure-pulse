@@ -221,6 +221,7 @@ CASE iState OF
         rOvershoot    := GVL_PulsePressure.PP_Oil_Overshoot,
         rRingPct      := GVL_PulsePressure.PP_Oil_RingPct,
         rLowDwellPct  := GVL_PulsePressure.PP_Oil_LowDwellPct,
+        rRiseRate     := GVL_PulsePressure.PP_Oil_WHRiseRate,
         rDt           := rDt,
         bReset        := FALSE,
         nMffLeadSteps := 0,    // 已移除 MFF, 不再需要超前相位
