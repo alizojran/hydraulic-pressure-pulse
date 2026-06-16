@@ -51,6 +51,8 @@ VAR_OUTPUT
 	rVPeak         : REAL;           // 水锤过冲峰指令 (MPa) — 让 actual 抵达 P_OS
 	rWHHoldActual  : REAL;           // 上周期 PMax 保压段 actual 均值 (诊断)
 	rWHLowActual   : REAL;           // 上周期 PMin 低保持段 actual 均值 (诊断)
+	// 梯形包络形态修正 (端点补偿之上叠加; 12 相位段, 把 actual 逐段压回上下包络带内)
+	rShapeCorr     : ARRAY [1..12] OF REAL;  // 各相位段 MPa 修正量 (叠加在端点重映射虚拟目标上)
 END_VAR
 VAR
 	rMidpoint        : REAL;
@@ -151,6 +153,11 @@ VAR
 	rWHLowErr           : REAL;       // PMin low 误差
 	rEnvInUp            : REAL;       // 内缩包络上限 = rTargetRaw + ENV_INNER_RATIO * (rEnvUpper - rTargetRaw)
 	rEnvInLo            : REAL;       // 内缩包络下限
+	// 梯形包络形态修正状态
+	rShapeOobSum        : ARRAY [1..12] OF REAL;  // 本周期各段越界量累加 (越上包络为负, 越下包络为正)
+	iShapeCnt           : ARRAY [1..12] OF INT;   // 各段采样计数
+	iShapeSeg           : INT;       // 当前相位段 (1..12)
+	rShapeOob           : REAL;      // 当前采样越界量
 END_VAR
 VAR CONSTANT
 	ALPHA_Q_MIN       : REAL := 0.04;
@@ -166,6 +173,8 @@ VAR CONSTANT
 	CYCLES_PER_UPDATE : INT  := 2;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
 	ENV_INNER_RATIO   : REAL := 0.8;     // 包络门控内缩比例: 用 80% 内包络作为学习门限, 防止 100% 边界震荡
+	SHAPE_CORR_LR     : REAL := 0.3;     // 包络形态修正学习率
+	SHAPE_CORR_LIMIT_K : REAL := 0.6;    // 包络形态修正限幅 = K × 量程
 END_VAR
 
 
@@ -236,6 +245,11 @@ IF bReset OR NOT bEnable THEN
     rWHOSPeakActual := -1.0E30;
     rWHHoldSum := 0.0; iWHHoldCount := 0;
     rWHLowSum  := 0.0; iWHLowCount  := 0;
+    FOR iBinK := 1 TO 12 DO
+        rShapeCorr[iBinK]   := 0.0;
+        rShapeOobSum[iBinK] := 0.0;
+        iShapeCnt[iBinK]    := 0;
+    END_FOR
     bNewCyclePrev  := FALSE;
     bAnyOver100    := FALSE;
     bAnyOver80     := FALSE;
@@ -295,12 +309,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     bAnyOver100 := FALSE;
     bAnyOver80  := FALSE;
 
-    // 水锤段累加器每周期复位 (无论是否学习, 否则下周期 actual 会叠加到旧值上)
-    IF nWaveType = 2 THEN
-        rWHOSPeakActual := -1.0E30;
-        rWHHoldSum := 0.0; iWHHoldCount := 0;
-        rWHLowSum  := 0.0; iWHLowCount  := 0;
-    END_IF
+    // (水锤累加器复位下移到学习之后, 见 bNewCycle 块尾; 否则会"复位早于学习读取")
 
     // RMS
     IF iErrorCount > 0 THEN
@@ -484,6 +493,19 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
+            // 梯形包络形态修正: 12 段, 把 actual 逐段压回上下包络带内 (带内→不变=保持已学修正)
+            IF bTrapShapeEnable AND nWaveType = 1 THEN
+                rLimit := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
+                FOR iBinK := 1 TO 12 DO
+                    IF iShapeCnt[iBinK] > 0 THEN
+                        rShapeCorr[iBinK] := rShapeCorr[iBinK]
+                            + SHAPE_CORR_LR * (rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]));
+                        IF rShapeCorr[iBinK] >  rLimit THEN rShapeCorr[iBinK] :=  rLimit; END_IF
+                        IF rShapeCorr[iBinK] < -rLimit THEN rShapeCorr[iBinK] := -rLimit; END_IF
+                    END_IF
+                END_FOR
+            END_IF
+
             // ----- 水锤波 3 级端点学习 (vPeak / vMax / vMin 分别对应 P_OS / PMax / PMin) -----
             // 仅当对应段有足够样本时更新; 段 2 (ring) 与段 4 (fall) 是过渡段, 不学习
             IF nWaveType = 2 THEN
@@ -539,6 +561,21 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
         rWH_T2 := rWH_T1 + rWHRingFrac;
         rWH_T3 := rWH_T2 + rWHHoldFrac;
         rWH_T4 := rWH_T3 + rWHFallFrac;
+    END_IF
+
+    // 水锤段累加器复位 (放在学习之后: 本周期学习已读完上一周期的累加值, 现清零供新周期累加)
+    IF nWaveType = 2 THEN
+        rWHOSPeakActual := -1.0E30;
+        rWHHoldSum := 0.0; iWHHoldCount := 0;
+        rWHLowSum  := 0.0; iWHLowCount  := 0;
+    END_IF
+
+    // 梯形形态修正累加器复位 (同样放在学习之后)
+    IF nWaveType = 1 THEN
+        FOR iBinK := 1 TO 12 DO
+            rShapeOobSum[iBinK] := 0.0;
+            iShapeCnt[iBinK]    := 0;
+        END_FOR
     END_IF
 
     // 复位平台 2 段反馈累加
@@ -701,6 +738,23 @@ IF nWaveType = 2 AND iIterCount >= 1 THEN
     END_IF
 END_IF
 
+// --------- 梯形包络形态修正 per-segment 越界累加 (12 等相位段) ---------
+IF bTrapShapeEnable AND nWaveType = 1 AND iIterCount >= 1 AND rEnvUpper > rEnvLower THEN
+    iShapeSeg := REAL_TO_INT(rPhi * 12.0);
+    IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
+    IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
+    iShapeSeg := iShapeSeg + 1;
+    IF rActual > rEnvUpper THEN
+        rShapeOob := rEnvUpper - rActual;      // 越上包络 → 负 (压低该段)
+    ELSIF rActual < rEnvLower THEN
+        rShapeOob := rEnvLower - rActual;      // 越下包络 → 正 (抬高该段)
+    ELSE
+        rShapeOob := 0.0;                       // 带内 → 不修
+    END_IF
+    rShapeOobSum[iShapeSeg] := rShapeOobSum[iShapeSeg] + rShapeOob;
+    iShapeCnt[iShapeSeg]    := iShapeCnt[iShapeSeg] + 1;
+END_IF
+
 // --------- 平台 2 段反馈累加（按 cmd phase 切割）---------
 IF (nWaveType = 1) AND iIterCount >= 1 THEN
     IF rPhi < rT1Cached AND rT1Cached > 0.001 THEN
@@ -803,8 +857,9 @@ ELSIF nWaveType = 2 THEN
     RETURN;
 
 ELSIF nWaveType = 1 THEN
-    // 梯形：默认仅端点补偿; 形态补偿(12 段相位重映射 + 梯形模板)需 bTrapShapeEnable=TRUE
-    IF bTrapShapeEnable THEN
+    // 梯形：端点补偿(下方仿射重映射到 [vMin,vMax]); 形态补偿改为末尾按上下包络逐段叠加 rShapeCorr
+    // 注: 下面 IF FALSE 内为(已停用)的 α-12 时序重映射, 大滞后下会把虚拟指令推移≈半周期致反相, 不再使用
+    IF FALSE THEN
     // 模板（标准振幅 0..1）：
     //   底平(0) → 升 0→0.2→0.4→0.6→0.8→1 → 顶平(1) → 降 1→0.8→0.6→0.4→0.2→0
     rT1  := rAlpha12Cmd[1];
@@ -877,21 +932,13 @@ END_IF
 rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
 
-// 梯形平台 2 段幅值修正：按 cmd phase 落在哪个子段叠加对应 MPa 偏置
-IF bTrapShapeEnable AND bPlatCorrEnable AND (nWaveType = 1) THEN
-    IF rPhi < rT1Cached THEN
-        IF rPhi < rBotMidPhase THEN
-            rVirtualTarget := rVirtualTarget + rPlatBotA;
-        ELSE
-            rVirtualTarget := rVirtualTarget + rPlatBotB;
-        END_IF
-    ELSIF rPhi >= rT6Cached AND rPhi < rT7Cached THEN
-        IF rPhi < rTopMidPhase THEN
-            rVirtualTarget := rVirtualTarget + rPlatTopA;
-        ELSE
-            rVirtualTarget := rVirtualTarget + rPlatTopB;
-        END_IF
-    END_IF
+// 梯形包络形态修正: 端点重映射之上, 按当前相位段叠加 rShapeCorr (把 actual 逐段压回上下包络带内)
+// 纯幅值修正, 无相位重映射 → 结构上不会出现 α-12 那种半周期反相
+IF bTrapShapeEnable AND (nWaveType = 1) THEN
+    iShapeSeg := REAL_TO_INT(rPhi * 12.0);
+    IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
+    IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
+    rVirtualTarget := rVirtualTarget + rShapeCorr[iShapeSeg + 1];
 END_IF
 
 rOutput := rVirtualTarget - rTargetRaw;
