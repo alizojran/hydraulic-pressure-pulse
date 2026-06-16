@@ -24,6 +24,7 @@ VAR_GLOBAL
 	PP_Oil_ILC_Enable : REAL; // 油路迭代学习控制使能
 	PP_Oil_ILC_MaxIter : REAL; // 油路ILC最大迭代次数
 	PP_Oil_ILC_LearningRate : REAL; // 油路ILC学习率(0~1)，0=使用容积自适应默认值
+	PP_Oil_ILC_TrapShape : REAL; // 梯形ILC形态补偿使能 0/1; 默认0=仅端点补偿(rVMin/rVMax重映射); 1=叠加α-12时序重映射+平台幅值修正
 	PP_Oil_PID_Kp : REAL := 2.0; // 油路 PID 比例增益 (V/MPa)
 	PP_Oil_PID_Ki : REAL := 0.5; // 油路 PID 积分增益 (V/MPa/s)
 	PP_Oil_PID_Kd : REAL := 0.005; // 油路 PID 微分增益 (V·s/MPa)

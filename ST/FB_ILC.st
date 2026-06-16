@@ -10,8 +10,9 @@ VAR_INPUT
 	iMaxIterations  : INT;
 	rLearningRate   : REAL := 0.3;   // 端点学习率
 	rAlphaLR        : REAL := 0.2;   // α 学习率（正弦 8 段、梯形 12 段）
-	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（正弦/梯形）
-	bPlatCorrEnable : BOOL := TRUE;  // 平台 2 段幅值修正使能（仅梯形生效）
+	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（仅正弦 8 段; 梯形形态由 bTrapShapeEnable 控制）
+	bPlatCorrEnable : BOOL := TRUE;  // 平台 2 段幅值修正使能（仅梯形, 且需 bTrapShapeEnable=TRUE 才生效）
+	bTrapShapeEnable : BOOL := FALSE; // 梯形形态补偿使能(α-12 时序重映射 + 平台幅值修正); 默认 FALSE = 仅端点补偿(rVMin/rVMax 重映射)
 	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正
 	iWaveTypeIn     : INT  := 0;     // 波形类型 (与 FB_WaveformGen 同编码): 0=正弦 1=梯形 2=水锤波; 其他值按正弦处理
 	rWHPMaxTarget   : REAL := 0.0;   // [水锤] PMax 保压段目标 (MPa); 用于 hold 段幅值修正学习
@@ -267,7 +268,13 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     //   - 出学习态: armed → disarmed, 触发条件 = 整个周期所有采样都在 80% 内包络
     //   - 不对称阈值避免临界处的 on/off 震荡。
     //   - 包络未配置 (rEnvUpper <= rEnvLower) 时退化为"每周期都学习", 兼容旧调用。
-    IF rEnvUpper <= rEnvLower THEN
+    IF nWaveType = 2 THEN
+        // 水锤波: Fig.2 包络含大段自由窗(过冲+ring 窗、下降窗), 不能当学习门控
+        // (actual 总在宽带内 → 永不触发 → 3 级端点学习不执行 → 无输出)。
+        // 改为始终学习: 端点设定点(P_OS/PMax/PMin)误差为 P 型, 抵达后自然趋零,
+        // iMaxIterations 仍可停学。
+        bDoLearnNow := TRUE;
+    ELSIF rEnvUpper <= rEnvLower THEN
         bDoLearnNow := TRUE;                 // 门控禁用 → 全部周期都学
     ELSIF bLearningArmed THEN
         // 当前在学习态: 本周期照学; 若 actual 已"全部回到 80% 内"则下周期起停学
@@ -392,7 +399,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             END_IF
 
             // α 12 段自学习 (梯形 nWaveType=1)
-            IF bAlphaEnable AND nWaveType = 1 THEN
+            IF bTrapShapeEnable AND nWaveType = 1 THEN
                 FOR iBinK := 1 TO 12 DO
                     rAlpha12Cmd[iBinK] := rAlpha12Cmd[iBinK]
                                        + rAlphaLR * (rAlpha12Tgt[iBinK] - rAlpha12Fb[iBinK]);
@@ -412,7 +419,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
 
             // 平台分 2 段幅值修正学习 (梯形 nWaveType=1)
             // 双门控：目标平台时间占比 < 3% → 跳过并衰减；样本不足 → 跳过
-            IF bPlatCorrEnable AND nWaveType = 1 THEN
+            IF bTrapShapeEnable AND bPlatCorrEnable AND nWaveType = 1 THEN
                 // 顶部平台
                 IF rAlpha12Tgt[7] >= PLAT_TGT_MIN_FRAC THEN
                     IF iCntTopA >= 2 THEN
@@ -796,7 +803,8 @@ ELSIF nWaveType = 2 THEN
     RETURN;
 
 ELSIF nWaveType = 1 THEN
-    // 梯形：12 段相位重映射 + 梯形模板
+    // 梯形：默认仅端点补偿; 形态补偿(12 段相位重映射 + 梯形模板)需 bTrapShapeEnable=TRUE
+    IF bTrapShapeEnable THEN
     // 模板（标准振幅 0..1）：
     //   底平(0) → 升 0→0.2→0.4→0.6→0.8→1 → 顶平(1) → 降 1→0.8→0.6→0.4→0.2→0
     rT1  := rAlpha12Cmd[1];
@@ -857,6 +865,9 @@ ELSIF nWaveType = 1 THEN
         ELSE rWarpedY := 0.1; END_IF
     END_IF
     rSourceTarget := rPrevTargetMin + rWarpedY * rPrevTargetRange;
+    ELSE
+        rSourceTarget := rTargetRaw;   // 仅端点补偿: 保留原指令形状, 由下方仿射重映射缩放到 [vMin,vMax]
+    END_IF
 
 ELSE
     rSourceTarget := rTargetRaw;
@@ -867,7 +878,7 @@ rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
 
 // 梯形平台 2 段幅值修正：按 cmd phase 落在哪个子段叠加对应 MPa 偏置
-IF bPlatCorrEnable AND (nWaveType = 1) THEN
+IF bTrapShapeEnable AND bPlatCorrEnable AND (nWaveType = 1) THEN
     IF rPhi < rT1Cached THEN
         IF rPhi < rBotMidPhase THEN
             rVirtualTarget := rVirtualTarget + rPlatBotA;

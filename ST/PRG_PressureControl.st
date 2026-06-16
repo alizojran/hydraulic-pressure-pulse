@@ -351,6 +351,7 @@ CASE iState OF
         bReset          := FALSE,
         iMaxIterations  := REAL_TO_INT(GVL_PulsePressure.PP_Oil_ILC_MaxIter),
         rLearningRate   := GVL_PulsePressure.PP_Oil_ILC_LearningRate,
+        bTrapShapeEnable := (GVL_PulsePressure.PP_Oil_ILC_TrapShape >= 0.5),  // 梯形: 默认仅端点补偿; ≥0.5 才开形态补偿
         iWaveTypeIn     := REAL_TO_INT(GVL_PulsePressure.PP_Oil_WaveType),
         rWHPMaxTarget   := GVL_PulsePressure.PP_Oil_TargetPressure,
         rWHRiseFrac     := fbWaveGen_O.rSegRise,
