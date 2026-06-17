@@ -309,6 +309,25 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             bVInitialized := TRUE;
         END_IF
 
+        // 梯形形态修正: 12 段命令跟踪, 只向上 (脱离包络门控, 每周期由死区自门控)
+        //   系统能主动升压、只能被动泄压: 实际低于指令(误差>0)→抬高该段把实际顶上去贴指令;
+        //   实际高于指令(下降/泄压段, 误差<0)→该段触底归 0, 不下压(被动泄压不较劲);
+        //   |误差|<死区→不动(保持已学修正)。保持后段 P 控稳态下垂在此被持续上修。
+        IF bTrapShapeEnable AND nWaveType = 1 THEN
+            rLimit   := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
+            rShapeDB := SHAPE_CORR_DB_K   * rPrevTargetRange;
+            FOR iBinK := 1 TO 12 DO
+                IF iShapeCnt[iBinK] > 0 THEN
+                    rShapeErrSeg := rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]);
+                    IF rShapeErrSeg > rShapeDB OR rShapeErrSeg < -rShapeDB THEN
+                        rShapeCorr[iBinK] := rShapeCorr[iBinK] + SHAPE_CORR_LR * rShapeErrSeg;
+                        IF rShapeCorr[iBinK] < 0.0    THEN rShapeCorr[iBinK] := 0.0;    END_IF
+                        IF rShapeCorr[iBinK] > rLimit THEN rShapeCorr[iBinK] := rLimit; END_IF
+                    END_IF
+                END_IF
+            END_FOR
+        END_IF
+
         IF iMaxIterations > 0 AND iIterCount >= iMaxIterations THEN
             bConverged := TRUE;
         ELSIF bDoLearnNow THEN  // 包络越界才学习 (本周期内 actual 曾越出 rEnvLower..rEnvUpper)
@@ -353,25 +372,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                     rValleyErrSum := 0.0;
                     nUpdateCount  := 0;
                 END_IF
-            END_IF
-
-            // 梯形形态修正: 12 段命令跟踪, 只向上 (系统能主动升压、只能被动泄压)
-            //   实际低于指令(误差>0) → 抬高该段虚拟指令, 把实际顶上去贴指令;
-            //   实际高于指令(下降/泄压段, 误差<0) → 该段触底归 0, 不下压(被动泄压不较劲);
-            //   |误差|<死区 → 不动 (保持已学修正)。
-            IF bTrapShapeEnable AND nWaveType = 1 THEN
-                rLimit   := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
-                rShapeDB := SHAPE_CORR_DB_K   * rPrevTargetRange;
-                FOR iBinK := 1 TO 12 DO
-                    IF iShapeCnt[iBinK] > 0 THEN
-                        rShapeErrSeg := rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]);
-                        IF rShapeErrSeg > rShapeDB OR rShapeErrSeg < -rShapeDB THEN
-                            rShapeCorr[iBinK] := rShapeCorr[iBinK] + SHAPE_CORR_LR * rShapeErrSeg;
-                            IF rShapeCorr[iBinK] < 0.0    THEN rShapeCorr[iBinK] := 0.0;    END_IF
-                            IF rShapeCorr[iBinK] > rLimit THEN rShapeCorr[iBinK] := rLimit; END_IF
-                        END_IF
-                    END_IF
-                END_FOR
             END_IF
 
             // ----- 水锤波 3 级端点学习 (vPeak / vMax / vMin 分别对应 P_OS / PMax / PMin) -----
