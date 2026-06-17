@@ -4206,7 +4206,12 @@ i := i + 2;
                       <INT />
                     </type>
                   </variable>
-                  <variable name="rShapeOob">
+                  <variable name="rShapeErrSeg">
+                    <type>
+                      <REAL />
+                    </type>
+                  </variable>
+                  <variable name="rShapeDB">
                     <type>
                       <REAL />
                     </type>
@@ -4275,6 +4280,14 @@ i := i + 2;
                     </type>
                     <initialValue>
                       <simpleValue value="0.6" />
+                    </initialValue>
+                  </variable>
+                  <variable name="SHAPE_CORR_DB_K">
+                    <type>
+                      <REAL />
+                    </type>
+                    <initialValue>
+                      <simpleValue value="0.01" />
                     </initialValue>
                   </variable>
                 </localVars>
@@ -4503,15 +4516,21 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // 梯形包络形态修正: 12 段, 把 actual 逐段压回上下包络带内 (带内→不变=保持已学修正)
+            // 梯形形态修正: 12 段命令跟踪, 只向上 (系统能主动升压、只能被动泄压)
+            //   实际低于指令(误差&gt;0) → 抬高该段虚拟指令, 把实际顶上去贴指令;
+            //   实际高于指令(下降/泄压段, 误差&lt;0) → 该段触底归 0, 不下压(被动泄压不较劲);
+            //   |误差|&lt;死区 → 不动 (保持已学修正)。
             IF bTrapShapeEnable AND nWaveType = 1 THEN
-                rLimit := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
+                rLimit   := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
+                rShapeDB := SHAPE_CORR_DB_K   * rPrevTargetRange;
                 FOR iBinK := 1 TO 12 DO
                     IF iShapeCnt[iBinK] &gt; 0 THEN
-                        rShapeCorr[iBinK] := rShapeCorr[iBinK]
-                            + SHAPE_CORR_LR * (rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]));
-                        IF rShapeCorr[iBinK] &gt;  rLimit THEN rShapeCorr[iBinK] :=  rLimit; END_IF
-                        IF rShapeCorr[iBinK] &lt; -rLimit THEN rShapeCorr[iBinK] := -rLimit; END_IF
+                        rShapeErrSeg := rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]);
+                        IF rShapeErrSeg &gt; rShapeDB OR rShapeErrSeg &lt; -rShapeDB THEN
+                            rShapeCorr[iBinK] := rShapeCorr[iBinK] + SHAPE_CORR_LR * rShapeErrSeg;
+                            IF rShapeCorr[iBinK] &lt; 0.0    THEN rShapeCorr[iBinK] := 0.0;    END_IF
+                            IF rShapeCorr[iBinK] &gt; rLimit THEN rShapeCorr[iBinK] := rLimit; END_IF
+                        END_IF
                     END_IF
                 END_FOR
             END_IF
@@ -4677,20 +4696,13 @@ IF nWaveType = 2 AND iIterCount &gt;= 1 THEN
     END_IF
 END_IF
 
-// --------- 梯形包络形态修正 per-segment 越界累加 (12 等相位段) ---------
-IF bTrapShapeEnable AND nWaveType = 1 AND iIterCount &gt;= 1 AND rEnvUpper &gt; rEnvLower THEN
+// --------- 梯形形态修正 per-segment 命令跟踪误差累加 (12 等相位段) ---------
+IF bTrapShapeEnable AND nWaveType = 1 AND iIterCount &gt;= 1 THEN
     iShapeSeg := REAL_TO_INT(rPhi * 12.0);
     IF iShapeSeg &lt; 0  THEN iShapeSeg := 0;  END_IF
     IF iShapeSeg &gt; 11 THEN iShapeSeg := 11; END_IF
     iShapeSeg := iShapeSeg + 1;
-    IF rActual &gt; rEnvUpper THEN
-        rShapeOob := rEnvUpper - rActual;      // 越上包络 → 负 (压低该段)
-    ELSIF rActual &lt; rEnvLower THEN
-        rShapeOob := rEnvLower - rActual;      // 越下包络 → 正 (抬高该段)
-    ELSE
-        rShapeOob := 0.0;                       // 带内 → 不修
-    END_IF
-    rShapeOobSum[iShapeSeg] := rShapeOobSum[iShapeSeg] + rShapeOob;
+    rShapeOobSum[iShapeSeg] := rShapeOobSum[iShapeSeg] + (rTargetRaw - rActual);  // 指令-实际; &gt;0=实际偏低
     iShapeCnt[iShapeSeg]    := iShapeCnt[iShapeSeg] + 1;
 END_IF
 
@@ -4786,7 +4798,7 @@ END_IF
 rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
 
-// 梯形包络形态修正: 端点重映射之上, 按当前相位段叠加 rShapeCorr (把 actual 逐段压回上下包络带内)
+// 梯形形态修正: 端点重映射之上, 按当前相位段叠加 rShapeCorr (≥0, 命令跟踪只向上)
 // 纯幅值修正, 无相位重映射 → 结构上不会出现 α-12 那种半周期反相
 IF bTrapShapeEnable AND (nWaveType = 1) THEN
     iShapeSeg := REAL_TO_INT(rPhi * 12.0);

@@ -42,7 +42,7 @@ VAR_OUTPUT
 	rWHHoldActual  : REAL;           // 上周期 PMax 保压段 actual 均值 (诊断)
 	rWHLowActual   : REAL;           // 上周期 PMin 低保持段 actual 均值 (诊断)
 	// 梯形包络形态修正 (端点补偿之上叠加; 12 相位段, 把 actual 逐段压回上下包络带内)
-	rShapeCorr     : ARRAY [1..12] OF REAL;  // 各相位段 MPa 修正量 (叠加在端点重映射虚拟目标上)
+	rShapeCorr     : ARRAY [1..12] OF REAL;  // 各相位段 MPa 修正量 (≥0, 只向上; 叠加在端点重映射虚拟目标上)
 END_VAR
 VAR
 	rMidpoint        : REAL;
@@ -114,10 +114,11 @@ VAR
 	rEnvInUp            : REAL;       // 内缩包络上限 = rTargetRaw + ENV_INNER_RATIO * (rEnvUpper - rTargetRaw)
 	rEnvInLo            : REAL;       // 内缩包络下限
 	// 梯形包络形态修正状态
-	rShapeOobSum        : ARRAY [1..12] OF REAL;  // 本周期各段越界量累加 (越上包络为负, 越下包络为正)
+	rShapeOobSum        : ARRAY [1..12] OF REAL;  // 本周期各段命令跟踪误差累加 (指令-实际; >0 实际偏低)
 	iShapeCnt           : ARRAY [1..12] OF INT;   // 各段采样计数
 	iShapeSeg           : INT;       // 当前相位段 (1..12)
-	rShapeOob           : REAL;      // 当前采样越界量
+	rShapeErrSeg        : REAL;      // 某段平均命令跟踪误差 (临时)
+	rShapeDB            : REAL;      // 形态修正死区 (MPa, = K×量程)
 END_VAR
 VAR CONSTANT
 	ALPHA_Q_MIN       : REAL := 0.04;
@@ -126,8 +127,9 @@ VAR CONSTANT
 	CYCLES_PER_UPDATE : INT  := 2;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
 	ENV_INNER_RATIO   : REAL := 0.8;     // 包络门控内缩比例: 用 80% 内包络作为学习门限, 防止 100% 边界震荡
-	SHAPE_CORR_LR     : REAL := 0.3;     // 包络形态修正学习率
-	SHAPE_CORR_LIMIT_K : REAL := 0.6;    // 包络形态修正限幅 = K × 量程
+	SHAPE_CORR_LR     : REAL := 0.3;     // 形态修正学习率
+	SHAPE_CORR_LIMIT_K : REAL := 0.6;    // 形态修正限幅 = K × 量程 (上限; 下限恒 0)
+	SHAPE_CORR_DB_K   : REAL := 0.01;    // 形态修正死区 = K × 量程 (|误差|<死区不修, 防抖)
 END_VAR
 
 
@@ -353,15 +355,21 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // 梯形包络形态修正: 12 段, 把 actual 逐段压回上下包络带内 (带内→不变=保持已学修正)
+            // 梯形形态修正: 12 段命令跟踪, 只向上 (系统能主动升压、只能被动泄压)
+            //   实际低于指令(误差>0) → 抬高该段虚拟指令, 把实际顶上去贴指令;
+            //   实际高于指令(下降/泄压段, 误差<0) → 该段触底归 0, 不下压(被动泄压不较劲);
+            //   |误差|<死区 → 不动 (保持已学修正)。
             IF bTrapShapeEnable AND nWaveType = 1 THEN
-                rLimit := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
+                rLimit   := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
+                rShapeDB := SHAPE_CORR_DB_K   * rPrevTargetRange;
                 FOR iBinK := 1 TO 12 DO
                     IF iShapeCnt[iBinK] > 0 THEN
-                        rShapeCorr[iBinK] := rShapeCorr[iBinK]
-                            + SHAPE_CORR_LR * (rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]));
-                        IF rShapeCorr[iBinK] >  rLimit THEN rShapeCorr[iBinK] :=  rLimit; END_IF
-                        IF rShapeCorr[iBinK] < -rLimit THEN rShapeCorr[iBinK] := -rLimit; END_IF
+                        rShapeErrSeg := rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]);
+                        IF rShapeErrSeg > rShapeDB OR rShapeErrSeg < -rShapeDB THEN
+                            rShapeCorr[iBinK] := rShapeCorr[iBinK] + SHAPE_CORR_LR * rShapeErrSeg;
+                            IF rShapeCorr[iBinK] < 0.0    THEN rShapeCorr[iBinK] := 0.0;    END_IF
+                            IF rShapeCorr[iBinK] > rLimit THEN rShapeCorr[iBinK] := rLimit; END_IF
+                        END_IF
                     END_IF
                 END_FOR
             END_IF
@@ -527,20 +535,13 @@ IF nWaveType = 2 AND iIterCount >= 1 THEN
     END_IF
 END_IF
 
-// --------- 梯形包络形态修正 per-segment 越界累加 (12 等相位段) ---------
-IF bTrapShapeEnable AND nWaveType = 1 AND iIterCount >= 1 AND rEnvUpper > rEnvLower THEN
+// --------- 梯形形态修正 per-segment 命令跟踪误差累加 (12 等相位段) ---------
+IF bTrapShapeEnable AND nWaveType = 1 AND iIterCount >= 1 THEN
     iShapeSeg := REAL_TO_INT(rPhi * 12.0);
     IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
     IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
     iShapeSeg := iShapeSeg + 1;
-    IF rActual > rEnvUpper THEN
-        rShapeOob := rEnvUpper - rActual;      // 越上包络 → 负 (压低该段)
-    ELSIF rActual < rEnvLower THEN
-        rShapeOob := rEnvLower - rActual;      // 越下包络 → 正 (抬高该段)
-    ELSE
-        rShapeOob := 0.0;                       // 带内 → 不修
-    END_IF
-    rShapeOobSum[iShapeSeg] := rShapeOobSum[iShapeSeg] + rShapeOob;
+    rShapeOobSum[iShapeSeg] := rShapeOobSum[iShapeSeg] + (rTargetRaw - rActual);  // 指令-实际; >0=实际偏低
     iShapeCnt[iShapeSeg]    := iShapeCnt[iShapeSeg] + 1;
 END_IF
 
@@ -636,7 +637,7 @@ END_IF
 rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
 
-// 梯形包络形态修正: 端点重映射之上, 按当前相位段叠加 rShapeCorr (把 actual 逐段压回上下包络带内)
+// 梯形形态修正: 端点重映射之上, 按当前相位段叠加 rShapeCorr (≥0, 命令跟踪只向上)
 // 纯幅值修正, 无相位重映射 → 结构上不会出现 α-12 那种半周期反相
 IF bTrapShapeEnable AND (nWaveType = 1) THEN
     iShapeSeg := REAL_TO_INT(rPhi * 12.0);
