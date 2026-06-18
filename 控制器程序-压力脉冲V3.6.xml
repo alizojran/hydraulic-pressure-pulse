@@ -4294,7 +4294,10 @@ i := i + 2;
               </interface>
               <body>
                 <ST>
-                  <xhtml xmlns="http://www.w3.org/1999/xhtml">// ============================================================
+                  <xhtml xmlns="http://www.w3.org/1999/xhtml">
+
+
+// ============================================================
 // 复位 / 禁用
 // ============================================================
 IF bReset OR NOT bEnable THEN
@@ -4470,25 +4473,6 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
             bVInitialized := TRUE;
         END_IF
 
-        // 梯形形态修正: 12 段命令跟踪, 只向上 (脱离包络门控, 每周期由死区自门控)
-        //   系统能主动升压、只能被动泄压: 实际低于指令(误差&gt;0)→抬高该段把实际顶上去贴指令;
-        //   实际高于指令(下降/泄压段, 误差&lt;0)→该段触底归 0, 不下压(被动泄压不较劲);
-        //   |误差|&lt;死区→不动(保持已学修正)。保持后段 P 控稳态下垂在此被持续上修。
-        IF bTrapShapeEnable AND nWaveType = 1 THEN
-            rLimit   := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
-            rShapeDB := SHAPE_CORR_DB_K   * rPrevTargetRange;
-            FOR iBinK := 1 TO 12 DO
-                IF iShapeCnt[iBinK] &gt; 0 THEN
-                    rShapeErrSeg := rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]);
-                    IF rShapeErrSeg &gt; rShapeDB OR rShapeErrSeg &lt; -rShapeDB THEN
-                        rShapeCorr[iBinK] := rShapeCorr[iBinK] + SHAPE_CORR_LR * rShapeErrSeg;
-                        IF rShapeCorr[iBinK] &lt; 0.0    THEN rShapeCorr[iBinK] := 0.0;    END_IF
-                        IF rShapeCorr[iBinK] &gt; rLimit THEN rShapeCorr[iBinK] := rLimit; END_IF
-                    END_IF
-                END_IF
-            END_FOR
-        END_IF
-
         IF iMaxIterations &gt; 0 AND iIterCount &gt;= iMaxIterations THEN
             bConverged := TRUE;
         ELSIF bDoLearnNow THEN  // 包络越界才学习 (本周期内 actual 曾越出 rEnvLower..rEnvUpper)
@@ -4511,8 +4495,9 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // 端点幅值自学习（加法型）：水锤波由专用 3 级学习处理, 跳过通用路径
-            IF nWaveType &lt;&gt; 2 THEN
+            // 端点幅值自学习（加法型, 仅正弦: 供 α 重映射后的仿射缩放）
+            //   梯形改用逐段命令跟踪、水锤用专用 3 级学习, 均跳过此通用路径
+            IF nWaveType = 0 THEN
                 rPeakErrSum   := rPeakErrSum   + rPeakError;
                 rValleyErrSum := rValleyErrSum + rValleyError;
                 nUpdateCount  := nUpdateCount  + 1;
@@ -4572,6 +4557,29 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 // 累加器复位已上提到 bNewCycle 入口 (无论是否学习都需要复位)
             END_IF
         END_IF
+    END_IF
+
+    // ============================================================
+    // 梯形形态修正更新 (每个暖机后周期都跑; 脱离 bConverged 与包络门控, 仅自死区门控)
+    //   纯 12 段命令跟踪前馈, 只向上 (系统能主动升压、只能被动泄压):
+    //     实际低于指令(误差&gt;0) → 抬高该段把实际顶上去贴指令 (治保持段 P 控稳态下垂、上升段欠冲);
+    //     实际高于指令(过冲/泄压段, 误差&lt;0) → 该段触底归 0, 不做无效下压;
+    //     |误差|&lt;死区 → 保持已学修正 (防抖)。
+    //   不随 iMaxIterations 收敛冻结 → 稳态下垂可持续上修; 与包络门控无关 → 带内也修。
+    // ============================================================
+    IF nWaveType = 1 AND iIterCount &gt; nWarmupCycles THEN
+        rLimit   := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
+        rShapeDB := SHAPE_CORR_DB_K   * rPrevTargetRange;
+        FOR iBinK := 1 TO 12 DO
+            IF iShapeCnt[iBinK] &gt; 0 THEN
+                rShapeErrSeg := rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]);
+                IF rShapeErrSeg &gt; rShapeDB OR rShapeErrSeg &lt; -rShapeDB THEN
+                    rShapeCorr[iBinK] := rShapeCorr[iBinK] + SHAPE_CORR_LR * rShapeErrSeg;
+                    IF rShapeCorr[iBinK] &lt; 0.0    THEN rShapeCorr[iBinK] := 0.0;    END_IF
+                    IF rShapeCorr[iBinK] &gt; rLimit THEN rShapeCorr[iBinK] := rLimit; END_IF
+                END_IF
+            END_IF
+        END_FOR
     END_IF
 
     // 缓存水锤波 5 段边界 (累积归一化相位; 上游已保证 sum = 1)
@@ -4697,7 +4705,7 @@ IF nWaveType = 2 AND iIterCount &gt;= 1 THEN
 END_IF
 
 // --------- 梯形形态修正 per-segment 命令跟踪误差累加 (12 等相位段) ---------
-IF bTrapShapeEnable AND nWaveType = 1 AND iIterCount &gt;= 1 THEN
+IF nWaveType = 1 AND iIterCount &gt;= 1 THEN
     iShapeSeg := REAL_TO_INT(rPhi * 12.0);
     IF iShapeSeg &lt; 0  THEN iShapeSeg := 0;  END_IF
     IF iShapeSeg &gt; 11 THEN iShapeSeg := 11; END_IF
@@ -4787,25 +4795,26 @@ ELSIF nWaveType = 2 THEN
     RETURN;
 
 ELSIF nWaveType = 1 THEN
-    // 梯形：端点补偿(仿射重映射到 [vMin,vMax]) + 末尾按上下包络逐段叠加 rShapeCorr 形态修正
-    rSourceTarget := rTargetRaw;
+    // 梯形：纯 12 段命令跟踪前馈 (只向上), 不做端点仿射重映射 → 提前返回。
+    //   端点仿射重映射从含瞬态过冲的峰/谷极值反学 → 把整段指令往下压(负输出),
+    //   既无法塑形保持段下垂, 又在谷段做无效下压(被动泄压压不下去)。
+    //   改为逐段叠加 rShapeCorr: 实际低于指令的段把指令顶上去, 过冲/泄压段归零。
+    //   rVirtualTarget = 指令 + 该段修正(≥0) → rOutput 恒 ≥ 0。
+    iShapeSeg := REAL_TO_INT(rPhi * 12.0);
+    IF iShapeSeg &lt; 0  THEN iShapeSeg := 0;  END_IF
+    IF iShapeSeg &gt; 11 THEN iShapeSeg := 11; END_IF
+    rVirtualTarget := rTargetRaw + rShapeCorr[iShapeSeg + 1];
+    rOutput        := rVirtualTarget - rTargetRaw;
+    bNewCyclePrev  := bNewCycle;
+    RETURN;
 
 ELSE
     rSourceTarget := rTargetRaw;
 END_IF
 
-// 仿射重映射 [tMin, tMax] → [vMin, vMax]
+// 仿射重映射 [tMin, tMax] → [vMin, vMax] (正弦 / 兜底)
 rNorm          := (rSourceTarget - rPrevTargetMin) / rPrevTargetRange;
 rVirtualTarget := rVMin + rNorm * (rVMax - rVMin);
-
-// 梯形形态修正: 端点重映射之上, 按当前相位段叠加 rShapeCorr (≥0, 命令跟踪只向上)
-// 纯幅值修正, 无相位重映射 → 结构上不会出现 α-12 那种半周期反相
-IF bTrapShapeEnable AND (nWaveType = 1) THEN
-    iShapeSeg := REAL_TO_INT(rPhi * 12.0);
-    IF iShapeSeg &lt; 0  THEN iShapeSeg := 0;  END_IF
-    IF iShapeSeg &gt; 11 THEN iShapeSeg := 11; END_IF
-    rVirtualTarget := rVirtualTarget + rShapeCorr[iShapeSeg + 1];
-END_IF
 
 rOutput := rVirtualTarget - rTargetRaw;
 
