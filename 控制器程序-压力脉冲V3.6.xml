@@ -4290,6 +4290,14 @@ i := i + 2;
                       <simpleValue value="0.01" />
                     </initialValue>
                   </variable>
+                  <variable name="SHAPE_HOLD_EPS">
+                    <type>
+                      <REAL />
+                    </type>
+                    <initialValue>
+                      <simpleValue value="0.05" />
+                    </initialValue>
+                  </variable>
                 </localVars>
               </interface>
               <body>
@@ -4352,7 +4360,6 @@ IF bReset OR NOT bEnable THEN
         rShapeOobSum[iBinK] := 0.0;
         iShapeCnt[iBinK]    := 0;
     END_FOR
-    iFlatDur       := 0;
     bNewCyclePrev  := FALSE;
     bAnyOver100    := FALSE;
     bAnyOver80     := FALSE;
@@ -4706,19 +4713,13 @@ IF nWaveType = 2 AND iIterCount &gt;= 1 THEN
     END_IF
 END_IF
 
-// --------- 梯形形态修正 per-segment 命令跟踪误差累加 (仅保持稳定段) ---------
-// 稳定段门控: 指令须在平顶 (rTargetRaw 接近 rPrevTargetMax) 连续保持 &gt; iSettleThresh 采样才累加。
-//   放过 (a) 上升/下降沿与低保持段; (b) 上升沿后实际仍在爬升的早段瞬态 —— 后者在传输滞后下
-//   会让逐段修正 windup/过冲(把指令推到上包络外、实际冲出公差带, 即此前的 M 形)。
-//   只修真正稳态下垂的后保持段, 配合温和学习率/限幅, 逐段修正即稳定。
+// --------- 梯形形态修正 per-segment 命令跟踪误差累加 (整个保持平顶) ---------
+// 累加整个保持平顶 (rTargetRaw 接近 rPrevTargetMax) 的命令跟踪误差, 不再排除早段瞬态。
+//   早段不再被排除是因为: 输出按滞后提前应用 (lag-FF, 见输出段), 各段修正落在"控制该处
+//   actual 的那一拍指令"上, 闭环对齐 → 不再出现此前 in-place 应用下的 windup/M 形。
+//   (iFlatDur / iSettleThresh / SHAPE_SETTLE_FRAC 已弃用, 保留声明以免改接口。)
 IF nWaveType = 1 AND iIterCount &gt;= 1 THEN
-    iSettleThresh := REAL_TO_INT(SHAPE_SETTLE_FRAC * INT_TO_REAL(iPointsPerCycle));
     IF rPrevTargetRange &gt; 0.001 AND rTargetRaw &gt; rPrevTargetMax - SHAPE_HOLD_EPS * rPrevTargetRange THEN
-        iFlatDur := iFlatDur + 1;       // 在保持平顶
-    ELSE
-        iFlatDur := 0;                  // 离开平顶 (上升/下降/低保持) → 清零
-    END_IF
-    IF iFlatDur &gt; iSettleThresh THEN
         iShapeSeg := REAL_TO_INT(rPhi * 12.0);
         IF iShapeSeg &lt; 0  THEN iShapeSeg := 0;  END_IF
         IF iShapeSeg &gt; 11 THEN iShapeSeg := 11; END_IF
@@ -4809,22 +4810,17 @@ ELSIF nWaveType = 2 THEN
     RETURN;
 
 ELSIF nWaveType = 1 THEN
-    // 梯形：逐段叠加 rShapeCorr (只向上, 仅保持稳定段非零), 不做端点仿射重映射 → 提前返回。
-    //   端点仿射重映射从含瞬态过冲的峰/谷极值反学 → 把整段指令往下压(负输出),
-    //   既无法塑形保持段下垂, 又在谷段做无效下压(被动泄压压不下去)。
-    //   rShapeCorr 只在保持稳定段学习(见 per-sample 门控), 上升/下降/早段瞬态恒 0;
-    //   故 rVirtualTarget = 指令 + 该段修正(≥0) → rOutput 恒 ≥ 0, 只抬保持平顶。
-    iShapeSeg := REAL_TO_INT(rPhi * 12.0);
+    // 梯形: 逐段修正按"滞后提前"应用 (lag-FF) —— 在指令相位 φ 施加为 actual 相位 (φ+lag) 学到的
+    //   修正量。actual 相位 ψ 由 φ=ψ-lag 处的指令决定; 把 ψ 的修正提前到 ψ-lag 施加, 使指令在
+    //   "控制该处 actual 的那一拍"就抬起 → actual 准时进带 (治上升→保持转角实际撞下限/欠冲),
+    //   且闭环对齐避免 in-place 应用的 windup/M 形。滞后取整周期互相关估计 (PRG 已算, GVL 传入, 周期%)。
+    //   φ+lag 落到下降/低保持段时该段修正为 0 → 不渗入下降段; rShapeCorr ≥ 0 → rOutput 恒 ≥ 0。
+    rNorm := rPhi + GVL_PulsePressure.PP_Oil_EnvPhaseLag * 0.01;   // 提前相位 (rNorm 复用为临时量)
+    IF rNorm &gt;= 1.0 THEN rNorm := rNorm - 1.0; END_IF
+    iShapeSeg := REAL_TO_INT(rNorm * 12.0);
     IF iShapeSeg &lt; 0  THEN iShapeSeg := 0;  END_IF
     IF iShapeSeg &gt; 11 THEN iShapeSeg := 11; END_IF
-    // 仅在指令仍处于保持平顶时叠加修正; 指令一离开平顶(进入下降段)立即归零。
-    //   否则跨保持末/下降首的段会把修正拖进下降段 → 抬高下降起点、actual 更晚泄压、
-    //   更易撞上包络下降尾。actual 保持段尾(滞后部分)由平顶内已施加的修正驱动, 不受影响。
-    IF rPrevTargetRange &gt; 0.001 AND rTargetRaw &gt; rPrevTargetMax - SHAPE_HOLD_EPS * rPrevTargetRange THEN
-        rVirtualTarget := rTargetRaw + rShapeCorr[iShapeSeg + 1];
-    ELSE
-        rVirtualTarget := rTargetRaw;
-    END_IF
+    rVirtualTarget := rTargetRaw + rShapeCorr[iShapeSeg + 1];
     rOutput        := rVirtualTarget - rTargetRaw;
     bNewCyclePrev  := bNewCycle;
     RETURN;
