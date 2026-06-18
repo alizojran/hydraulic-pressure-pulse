@@ -4817,7 +4817,14 @@ ELSIF nWaveType = 1 THEN
     iShapeSeg := REAL_TO_INT(rPhi * 12.0);
     IF iShapeSeg &lt; 0  THEN iShapeSeg := 0;  END_IF
     IF iShapeSeg &gt; 11 THEN iShapeSeg := 11; END_IF
-    rVirtualTarget := rTargetRaw + rShapeCorr[iShapeSeg + 1];
+    // 仅在指令仍处于保持平顶时叠加修正; 指令一离开平顶(进入下降段)立即归零。
+    //   否则跨保持末/下降首的段会把修正拖进下降段 → 抬高下降起点、actual 更晚泄压、
+    //   更易撞上包络下降尾。actual 保持段尾(滞后部分)由平顶内已施加的修正驱动, 不受影响。
+    IF rPrevTargetRange &gt; 0.001 AND rTargetRaw &gt; rPrevTargetMax - SHAPE_HOLD_EPS * rPrevTargetRange THEN
+        rVirtualTarget := rTargetRaw + rShapeCorr[iShapeSeg + 1];
+    ELSE
+        rVirtualTarget := rTargetRaw;
+    END_IF
     rOutput        := rVirtualTarget - rTargetRaw;
     bNewCyclePrev  := bNewCycle;
     RETURN;

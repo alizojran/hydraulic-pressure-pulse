@@ -130,7 +130,7 @@ VAR CONSTANT
 	V_RANGE_LIMIT_K   : REAL := 2.0;
 	ENV_INNER_RATIO   : REAL := 0.8;     // 包络门控内缩比例: 用 80% 内包络作为学习门限, 防止 100% 边界震荡
 	SHAPE_CORR_LR     : REAL := 0.1;     // 形态修正学习率 (温和: 滞后下逐段修正需慢学防失稳)
-	SHAPE_CORR_LIMIT_K : REAL := 0.25;   // 形态修正限幅 = K × 量程 (上限; 下限恒 0)
+	SHAPE_CORR_LIMIT_K : REAL := 0.6;    // 形态修正限幅 = K × 量程 (上限; 下限恒 0); 小 Kp 下垂大需更大头寸
 	SHAPE_CORR_DB_K   : REAL := 0.01;    // 形态修正死区 = K × 量程 (|误差|<死区不修, 防抖)
 	SHAPE_SETTLE_FRAC : REAL := 0.1;     // 稳定段门控: 指令在平顶连续保持 > 此比例×周期点数 才修 (放过上升沿后的实际爬升瞬态)
 	SHAPE_HOLD_EPS    : REAL := 0.05;    // 平顶判定: rTargetRaw > rPrevTargetMax - K×量程 视为在保持平顶 (排除上升/下降/低保持)
@@ -657,7 +657,14 @@ ELSIF nWaveType = 1 THEN
     iShapeSeg := REAL_TO_INT(rPhi * 12.0);
     IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
     IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
-    rVirtualTarget := rTargetRaw + rShapeCorr[iShapeSeg + 1];
+    // 仅在指令仍处于保持平顶时叠加修正; 指令一离开平顶(进入下降段)立即归零。
+    //   否则跨保持末/下降首的段会把修正拖进下降段 → 抬高下降起点、actual 更晚泄压、
+    //   更易撞上包络下降尾。actual 保持段尾(滞后部分)由平顶内已施加的修正驱动, 不受影响。
+    IF rPrevTargetRange > 0.001 AND rTargetRaw > rPrevTargetMax - SHAPE_HOLD_EPS * rPrevTargetRange THEN
+        rVirtualTarget := rTargetRaw + rShapeCorr[iShapeSeg + 1];
+    ELSE
+        rVirtualTarget := rTargetRaw;
+    END_IF
     rOutput        := rVirtualTarget - rTargetRaw;
     bNewCyclePrev  := bNewCycle;
     RETURN;
