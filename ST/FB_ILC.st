@@ -119,6 +119,7 @@ VAR
 	iShapeSeg           : INT;       // 当前相位段 (1..12)
 	rShapeErrSeg        : REAL;      // 某段平均命令跟踪误差 (临时)
 	rShapeDB            : REAL;      // 形态修正死区 (MPa, = K×量程)
+	rShapeSmooth        : ARRAY [1..12] OF REAL;  // 跨段平滑临时缓冲 (抹平早段尖峰)
 END_VAR
 VAR CONSTANT
 	ALPHA_Q_MIN       : REAL := 0.04;
@@ -131,6 +132,7 @@ VAR CONSTANT
 	SHAPE_CORR_LIMIT_K : REAL := 0.6;    // 形态修正限幅 = K × 量程 (上限; 下限恒 0); 小 Kp 下垂大需更大头寸
 	SHAPE_CORR_DB_K   : REAL := 0.01;    // 形态修正死区 = K × 量程 (|误差|<死区不修, 防抖)
 	SHAPE_HOLD_EPS    : REAL := 0.05;    // 平顶判定: rTargetRaw > rPrevTargetMax - K×量程 视为在保持平顶 (排除上升/下降/低保持)
+	SHAPE_SMOOTH      : REAL := 0.5;     // 跨段平滑系数 (抹平上升→保持转角的早段尖峰, 防提前应用时指令顶过上包络)
 END_VAR
 
 
@@ -402,7 +404,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     //     实际低于指令(误差>0) → 抬高该保持段把实际顶回公差带 (治 P 控稳态下垂);
     //     实际高于指令(误差<0) → 该段触底归 0, 不做无效下压(被动泄压压不下去);
     //     |误差|<死区 → 保持已学修正 (防抖)。
-    //   上升/下降沿与早段瞬态不累加 → 修正量恒为 0, 不参与 → 放过滞后引起的 windup。
+    //   累加整个保持平顶 (含早段), 末尾跨段平滑抹平早段尖峰; 配合 lag-FF 提前应用避免 windup。
     //   不随 iMaxIterations 收敛冻结 → 稳态下垂可持续上修; 与包络门控无关 → 带内也修。
     // ============================================================
     IF nWaveType = 1 AND iIterCount > nWarmupCycles THEN
@@ -417,6 +419,16 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                     IF rShapeCorr[iBinK] > rLimit THEN rShapeCorr[iBinK] := rLimit; END_IF
                 END_IF
             END_IF
+        END_FOR
+        // 跨段平滑: 抹平上升→保持转角处的早段尖峰。早段(实际刚从上升爬上来、欠冲最大)会学出
+        //   远大于稳态下垂的修正; 经 lag-FF 提前应用时会把上升末指令顶出一个尖峰 → actual 冲过上包络。
+        //   平滑后修正沿相位平缓 → 指令平滑升到保持电平、不形成尖峰 → 不撞上包络, 各段仍被抬起。
+        FOR iBinK := 1 TO 12 DO
+            rShapeSmooth[iBinK] := (1.0 - SHAPE_SMOOTH) * rShapeCorr[iBinK]
+                + 0.5 * SHAPE_SMOOTH * (rShapeCorr[((iBinK + 10) MOD 12) + 1] + rShapeCorr[(iBinK MOD 12) + 1]);
+        END_FOR
+        FOR iBinK := 1 TO 12 DO
+            rShapeCorr[iBinK] := rShapeSmooth[iBinK];
         END_FOR
     END_IF
 
@@ -649,7 +661,13 @@ ELSIF nWaveType = 1 THEN
     iShapeSeg := REAL_TO_INT(rNorm * 12.0);
     IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
     IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
-    rVirtualTarget := rTargetRaw + rShapeCorr[iShapeSeg + 1];
+    // 仅在指令上升/平顶时施加 (bTgtRising): 下降段不加修正, 防平滑外溢到下降段、延迟泄压撞包络。
+    //   actual 保持段(滞后)由上升/平顶段已施加的修正驱动, 故覆盖不受影响。
+    IF bTgtRising THEN
+        rVirtualTarget := rTargetRaw + rShapeCorr[iShapeSeg + 1];
+    ELSE
+        rVirtualTarget := rTargetRaw;
+    END_IF
     rOutput        := rVirtualTarget - rTargetRaw;
     bNewCyclePrev  := bNewCycle;
     RETURN;
