@@ -119,6 +119,8 @@ VAR
 	iShapeSeg           : INT;       // 当前相位段 (1..12)
 	rShapeErrSeg        : REAL;      // 某段平均命令跟踪误差 (临时)
 	rShapeDB            : REAL;      // 形态修正死区 (MPa, = K×量程)
+	iFlatDur            : INT;       // 指令在保持平顶连续采样数 (离开平顶清零); 用于稳定段门控
+	iSettleThresh       : INT;       // 稳定段门控阈值 = SHAPE_SETTLE_FRAC × iPointsPerCycle
 END_VAR
 VAR CONSTANT
 	ALPHA_Q_MIN       : REAL := 0.04;
@@ -127,9 +129,11 @@ VAR CONSTANT
 	CYCLES_PER_UPDATE : INT  := 2;
 	V_RANGE_LIMIT_K   : REAL := 2.0;
 	ENV_INNER_RATIO   : REAL := 0.8;     // 包络门控内缩比例: 用 80% 内包络作为学习门限, 防止 100% 边界震荡
-	SHAPE_CORR_LR     : REAL := 0.3;     // 形态修正学习率
-	SHAPE_CORR_LIMIT_K : REAL := 0.3;    // 形态修正限幅 = K × 量程 (上限; 下限恒 0); 限制上升沿命令跟踪 windup
+	SHAPE_CORR_LR     : REAL := 0.1;     // 形态修正学习率 (温和: 滞后下逐段修正需慢学防失稳)
+	SHAPE_CORR_LIMIT_K : REAL := 0.25;   // 形态修正限幅 = K × 量程 (上限; 下限恒 0)
 	SHAPE_CORR_DB_K   : REAL := 0.01;    // 形态修正死区 = K × 量程 (|误差|<死区不修, 防抖)
+	SHAPE_SETTLE_FRAC : REAL := 0.1;     // 稳定段门控: 指令在平顶连续保持 > 此比例×周期点数 才修 (放过上升沿后的实际爬升瞬态)
+	SHAPE_HOLD_EPS    : REAL := 0.05;    // 平顶判定: rTargetRaw > rPrevTargetMax - K×量程 视为在保持平顶 (排除上升/下降/低保持)
 END_VAR
 
 
@@ -188,6 +192,7 @@ IF bReset OR NOT bEnable THEN
         rShapeOobSum[iBinK] := 0.0;
         iShapeCnt[iBinK]    := 0;
     END_FOR
+    iFlatDur       := 0;
     bNewCyclePrev  := FALSE;
     bAnyOver100    := FALSE;
     bAnyOver80     := FALSE;
@@ -397,10 +402,11 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
 
     // ============================================================
     // 梯形形态修正更新 (每个暖机后周期都跑; 脱离 bConverged 与包络门控, 仅自死区门控)
-    //   纯 12 段命令跟踪前馈, 只向上 (系统能主动升压、只能被动泄压):
-    //     实际低于指令(误差>0) → 抬高该段把实际顶上去贴指令 (治保持段 P 控稳态下垂、上升段欠冲);
-    //     实际高于指令(过冲/泄压段, 误差<0) → 该段触底归 0, 不做无效下压;
+    //   逐段命令跟踪前馈, 只向上, 仅作用于"保持稳定段"(累加门控见 per-sample 段):
+    //     实际低于指令(误差>0) → 抬高该保持段把实际顶回公差带 (治 P 控稳态下垂);
+    //     实际高于指令(误差<0) → 该段触底归 0, 不做无效下压(被动泄压压不下去);
     //     |误差|<死区 → 保持已学修正 (防抖)。
+    //   上升/下降沿与早段瞬态不累加 → 修正量恒为 0, 不参与 → 放过滞后引起的 windup。
     //   不随 iMaxIterations 收敛冻结 → 稳态下垂可持续上修; 与包络门控无关 → 带内也修。
     // ============================================================
     IF nWaveType = 1 AND iIterCount > nWarmupCycles THEN
@@ -540,14 +546,26 @@ IF nWaveType = 2 AND iIterCount >= 1 THEN
     END_IF
 END_IF
 
-// --------- 梯形形态修正 per-segment 命令跟踪误差累加 (12 等相位段) ---------
+// --------- 梯形形态修正 per-segment 命令跟踪误差累加 (仅保持稳定段) ---------
+// 稳定段门控: 指令须在平顶 (rTargetRaw 接近 rPrevTargetMax) 连续保持 > iSettleThresh 采样才累加。
+//   放过 (a) 上升/下降沿与低保持段; (b) 上升沿后实际仍在爬升的早段瞬态 —— 后者在传输滞后下
+//   会让逐段修正 windup/过冲(把指令推到上包络外、实际冲出公差带, 即此前的 M 形)。
+//   只修真正稳态下垂的后保持段, 配合温和学习率/限幅, 逐段修正即稳定。
 IF nWaveType = 1 AND iIterCount >= 1 THEN
-    iShapeSeg := REAL_TO_INT(rPhi * 12.0);
-    IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
-    IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
-    iShapeSeg := iShapeSeg + 1;
-    rShapeOobSum[iShapeSeg] := rShapeOobSum[iShapeSeg] + (rTargetRaw - rActual);  // 指令-实际; >0=实际偏低
-    iShapeCnt[iShapeSeg]    := iShapeCnt[iShapeSeg] + 1;
+    iSettleThresh := REAL_TO_INT(SHAPE_SETTLE_FRAC * INT_TO_REAL(iPointsPerCycle));
+    IF rPrevTargetRange > 0.001 AND rTargetRaw > rPrevTargetMax - SHAPE_HOLD_EPS * rPrevTargetRange THEN
+        iFlatDur := iFlatDur + 1;       // 在保持平顶
+    ELSE
+        iFlatDur := 0;                  // 离开平顶 (上升/下降/低保持) → 清零
+    END_IF
+    IF iFlatDur > iSettleThresh THEN
+        iShapeSeg := REAL_TO_INT(rPhi * 12.0);
+        IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
+        IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
+        iShapeSeg := iShapeSeg + 1;
+        rShapeOobSum[iShapeSeg] := rShapeOobSum[iShapeSeg] + (rTargetRaw - rActual);  // 指令-实际; >0=实际偏低
+        iShapeCnt[iShapeSeg]    := iShapeCnt[iShapeSeg] + 1;
+    END_IF
 END_IF
 
 // ============================================================
@@ -631,11 +649,11 @@ ELSIF nWaveType = 2 THEN
     RETURN;
 
 ELSIF nWaveType = 1 THEN
-    // 梯形：纯 12 段命令跟踪前馈 (只向上), 不做端点仿射重映射 → 提前返回。
+    // 梯形：逐段叠加 rShapeCorr (只向上, 仅保持稳定段非零), 不做端点仿射重映射 → 提前返回。
     //   端点仿射重映射从含瞬态过冲的峰/谷极值反学 → 把整段指令往下压(负输出),
     //   既无法塑形保持段下垂, 又在谷段做无效下压(被动泄压压不下去)。
-    //   改为逐段叠加 rShapeCorr: 实际低于指令的段把指令顶上去, 过冲/泄压段归零。
-    //   rVirtualTarget = 指令 + 该段修正(≥0) → rOutput 恒 ≥ 0。
+    //   rShapeCorr 只在保持稳定段学习(见 per-sample 门控), 上升/下降/早段瞬态恒 0;
+    //   故 rVirtualTarget = 指令 + 该段修正(≥0) → rOutput 恒 ≥ 0, 只抬保持平顶。
     iShapeSeg := REAL_TO_INT(rPhi * 12.0);
     IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
     IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
