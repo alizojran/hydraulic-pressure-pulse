@@ -67,6 +67,7 @@ VAR CONSTANT
 	ENV_TRAP_UP   : REAL := 1.04;  // Fig.1 保压带上限 ×PMax
 	ENV_TRAP_LO   : REAL := 0.96;  // Fig.1 保压带下限 ×PMax (带内驻留应为 10%~37% 周期)
 	ENV_SLACK     : REAL := 0.05;  // Fig.1 升/降沿包络张开宽度 (周期占比)
+	SHIFT_FALL_TO_HOLD : REAL := 0.2;  // 梯形: 内部把下降段前 20% 并入保持段 (外部输入不变), 下降起点拐点右移防 actual 滞后撞下限
 	ENV_BASE_K    : REAL := 1.1;   // 低压段包络上限 ×PMin (Fig.1/2 公用)
 	ENV_BASE_MIN  : REAL := 0.345; // 低压段包络上限下钳 (MPa, = 50 psi "BUT NOT LESS THAN")
 	ENV_WH_PKTOL  : REAL := 0.04;  // Fig.2 过冲峰容差 ×P_OS (PEAK PRESSURE TOLERANCE ±4%)
@@ -139,6 +140,12 @@ CASE iWaveType OF
     IF rR < 0.01 THEN rR := 0.1; END_IF
     IF rH < 0.01 THEN rH := 0.3; END_IF
     IF rF < 0.01 THEN rF := 0.1; END_IF
+    // 内部把下降段前 SHIFT_FALL_TO_HOLD 比例并入保持段 (外部 rHoldPct/rFallPct 输入不变):
+    //   保持平顶 +SHIFT×rF, 下降段缩为 (1-SHIFT)×rF; 下降终点与低保持 rL(缓降拖尾)不变。
+    //   → 下降起点(及下包络拐点 rET2=rR+rH)右移, actual 滞后不再在下降起始拐点处撞下限。
+    //   指令(FN_PulseWave)与包络(下方 CASE)都用此处 rH/rF, 故两者同步右移、带形与指令一致。
+    rH := rH + SHIFT_FALL_TO_HOLD * rF;
+    rF := (1.0 - SHIFT_FALL_TO_HOLD) * rF;
     rL := 1.0 - rR - rH - rF;
     IF rL < 0.0 THEN rL := 0.0; END_IF
     // 梯形不用 rRing/rPeakOS，置零以防函数访问无效值
