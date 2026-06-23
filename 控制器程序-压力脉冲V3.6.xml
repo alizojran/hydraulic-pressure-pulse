@@ -2210,11 +2210,11 @@ END_IF
 //               2·0.05C = 0.1C (最大畸变)。时移恒向极值 → 标称必在带内
 // 梯形  (Fig.1 上图/供油腔): 保压带 [0.96, 1.04]·PMax; 低压段上限
 //               1.1·PMin (不低于 0.345 MPa = 50 psi); 升/降沿包络边沿与
-//               指令同斜率 (平行, 由指令仿射/相位平移生成 → 实际不撞沿):
-//               上包络升沿=指令仿射到 1.04·PMax; 下包络=0.96·PMax×指令
-//               归一(取 φ±ENV_SLACK 较小者 → 升沿滞后 slack/降沿提前 slack);
-//               上包络下降段保持满量程 1.04·PMax 后自降沿结束缓降回
-//               1.1·PMin (长拖尾, 允许实际慢泄压)
+//               指令同斜率 (由指令相位平移 ±ENV_SLACK 生成 → 实际不撞沿):
+//               上包络=1.1·PMin→1.04·PMax 仿射×(φ±slack 较大归一)→升沿
+//               提前(在指令之上)/降沿滞后; 下包络=0.96·PMax×(φ±slack 较
+//               小归一)→升沿滞后/降沿提前(先于实际下落); 上包络下降段
+//               另保满量程 1.04·PMax 后缓降回 1.1·PMin (长拖尾, 允许慢泄压)
 // 水锤  (Fig.2): 过冲峰+ring 段 (标准 0~15%C) 为全幅自由窗: 上包络
 //               平直 1.04·P_OS (峰容差 ±4%, 峰值下限 0.96·P_OS 需另
 //               行峰值检测)、下包络 0; 保压段上限 1.1·PMax / 下限
@@ -2231,35 +2231,44 @@ IF rBaseUp &lt; ENV_BASE_MIN THEN rBaseUp := ENV_BASE_MIN; END_IF
 
 CASE iWaveType OF
 
-1:  // ---- 梯形 (Fig.1): 包络边沿与指令同斜率 (平行), 防实际撞沿 ----
+1:  // ---- 梯形 (Fig.1): 包络边沿与指令同斜率 (由指令相位平移 ±ENV_SLACK 生成), 实际不撞沿 ----
     rET2 := rR + rH;        // 保压结束 / 降沿开始
     rET3 := rR + rH + rF;   // 降沿结束
 
     IF rPMax - rPMin &gt; 0.001 THEN
-        // 上包络: 升沿+保压 = 指令仿射映射 [PMin,PMax]→[1.1·PMin, 1.04·PMax] (升沿与指令同斜率,
-        //   保压平直 1.04·PMax); 下降段保持满量程 1.04·PMax (给实际泄压留全幅余量), 自降沿结束
-        //   缓降回 1.1·PMin (长拖尾, 允许实际慢泄压)。
-        IF rPhase &lt; rET2 THEN
-            rTargetUpper := rBaseUp + (ENV_TRAP_UP * rPMax - rBaseUp) * (rTarget - rPMin) / (rPMax - rPMin);
-        ELSIF rPhase &lt; rET3 THEN
-            rTargetUpper := ENV_TRAP_UP * rPMax;
-        ELSIF rET3 &lt; 0.999 THEN
-            rTargetUpper := ENV_TRAP_UP * rPMax
-                          + (rBaseUp - ENV_TRAP_UP * rPMax) * (rPhase - rET3) / (1.0 - rET3);
-        ELSE
-            rTargetUpper := rBaseUp;
-        END_IF
-
-        // 下包络: 0.96·PMax × 指令归一化(取 φ±ENV_SLACK 两相位中较小者) → 升沿滞后 slack、
-        //   降沿提前 slack, 边沿与指令同斜率。降沿提前下落 → 下降中实际仍在其上方, 不撞下包络拐点。
+        // 指令在 φ±ENV_SLACK 两相位的归一化幅值 (时间容差 = 相位平移 ±slack → 边沿与指令同斜率)
         rEnvPhL := rPhase - ENV_SLACK; IF rEnvPhL &lt; 0.0  THEN rEnvPhL := rEnvPhL + 1.0; END_IF
         rEnvPhU := rPhase + ENV_SLACK; IF rEnvPhU &gt;= 1.0 THEN rEnvPhU := rEnvPhU - 1.0; END_IF
-        rET1   := (FN_PulseWave(rPhaseIn := rEnvPhL, rPMin := rPMin, rPMax := rPMax, iWaveType := 1,
-                                rR := rR, rH := rH, rF := rF, rRing := 0.0, rPeakOS := rPMax) - rPMin) / (rPMax - rPMin);
-        rEnvDP := (FN_PulseWave(rPhaseIn := rEnvPhU, rPMin := rPMin, rPMax := rPMax, iWaveType := 1,
-                                rR := rR, rH := rH, rF := rF, rRing := 0.0, rPeakOS := rPMax) - rPMin) / (rPMax - rPMin);
-        IF rEnvDP &lt; rET1 THEN rET1 := rEnvDP; END_IF        // 取较小归一化 (升沿滞后/降沿提前)
-        rTargetLower := ENV_TRAP_LO * rPMax * rET1;
+        rET1 := (FN_PulseWave(rPhaseIn := rEnvPhL, rPMin := rPMin, rPMax := rPMax, iWaveType := 1,
+                              rR := rR, rH := rH, rF := rF, rRing := 0.0, rPeakOS := rPMax) - rPMin) / (rPMax - rPMin);  // nL = 指令(φ-slack)
+        rET4 := (FN_PulseWave(rPhaseIn := rEnvPhU, rPMin := rPMin, rPMax := rPMax, iWaveType := 1,
+                              rR := rR, rH := rH, rF := rF, rRing := 0.0, rPeakOS := rPMax) - rPMin) / (rPMax - rPMin);  // nU = 指令(φ+slack)
+
+        // 上包络 = 1.1·PMin→1.04·PMax 仿射 × 两相位较大归一化 → 升沿提前(在指令之上)/降沿滞后, 与指令同斜率
+        IF rET1 &gt;= rET4 THEN
+            rTargetUpper := rBaseUp + (ENV_TRAP_UP * rPMax - rBaseUp) * rET1;
+        ELSE
+            rTargetUpper := rBaseUp + (ENV_TRAP_UP * rPMax - rBaseUp) * rET4;
+        END_IF
+        // 下包络 = 0.96·PMax × 两相位较小归一化 → 升沿滞后/降沿提前(先于实际下落, 不撞下限拐点)
+        IF rET1 &lt;= rET4 THEN
+            rTargetLower := ENV_TRAP_LO * rPMax * rET1;
+        ELSE
+            rTargetLower := ENV_TRAP_LO * rPMax * rET4;
+        END_IF
+
+        // 上包络下降段: 保满量程 1.04·PMax + 自降沿结束缓降回 1.1·PMin (长拖尾, 给实际慢泄压留余量),
+        //   与上面平行上包络取较大者 (拖尾期间高于平行值)。
+        IF rPhase &gt;= rET2 THEN
+            IF rPhase &lt; rET3 THEN
+                rEnvDP := ENV_TRAP_UP * rPMax;
+            ELSIF rET3 &lt; 0.999 THEN
+                rEnvDP := ENV_TRAP_UP * rPMax + (rBaseUp - ENV_TRAP_UP * rPMax) * (rPhase - rET3) / (1.0 - rET3);
+            ELSE
+                rEnvDP := rBaseUp;
+            END_IF
+            IF rEnvDP &gt; rTargetUpper THEN rTargetUpper := rEnvDP; END_IF
+        END_IF
     ELSE
         rTargetUpper := rPMax;
         rTargetLower := rPMin;
@@ -3896,7 +3905,7 @@ i := i + 2;
                   </variable>
                   <variable name="rShapeCorr">
                     <type>
-                      <array><dimension lower="1" upper="12" /><baseType><REAL /></baseType></array>
+                      <array><dimension lower="1" upper="36" /><baseType><REAL /></baseType></array>
                     </type>
                   </variable>
                 </outputVars>
@@ -4218,12 +4227,12 @@ i := i + 2;
                   </variable>
                   <variable name="rShapeOobSum">
                     <type>
-                      <array><dimension lower="1" upper="12" /><baseType><REAL /></baseType></array>
+                      <array><dimension lower="1" upper="36" /><baseType><REAL /></baseType></array>
                     </type>
                   </variable>
                   <variable name="iShapeCnt">
                     <type>
-                      <array><dimension lower="1" upper="12" /><baseType><INT /></baseType></array>
+                      <array><dimension lower="1" upper="36" /><baseType><INT /></baseType></array>
                     </type>
                   </variable>
                   <variable name="iShapeSeg">
@@ -4372,7 +4381,7 @@ IF bReset OR NOT bEnable THEN
     rWHOSPeakActual := -1.0E30;
     rWHHoldSum := 0.0; iWHHoldCount := 0;
     rWHLowSum  := 0.0; iWHLowCount  := 0;
-    FOR iBinK := 1 TO 12 DO
+    FOR iBinK := 1 TO 36 DO
         rShapeCorr[iBinK]   := 0.0;
         rShapeOobSum[iBinK] := 0.0;
         iShapeCnt[iBinK]    := 0;
@@ -4599,7 +4608,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     IF nWaveType = 1 AND bTrapShapeEnable AND iIterCount &gt; nWarmupCycles THEN
         rLimit   := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
         rShapeDB := SHAPE_CORR_DB_K   * rPrevTargetRange;
-        FOR iBinK := 1 TO 12 DO
+        FOR iBinK := 1 TO 36 DO
             IF iShapeCnt[iBinK] &gt; 0 THEN
                 rShapeErrSeg := rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]);
                 IF rShapeErrSeg &gt; rShapeDB OR rShapeErrSeg &lt; -rShapeDB THEN
@@ -4628,7 +4637,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
 
     // 梯形形态修正累加器复位 (同样放在学习之后)
     IF nWaveType = 1 THEN
-        FOR iBinK := 1 TO 12 DO
+        FOR iBinK := 1 TO 36 DO
             rShapeOobSum[iBinK] := 0.0;
             iShapeCnt[iBinK]    := 0;
         END_FOR
@@ -4738,9 +4747,9 @@ END_IF
 //   各段修正按 lag-FF 提前应用 (见输出段), 落在"控制该处 actual 的那一拍指令"上, 闭环对齐
 //   → 升段抬指令补滞后、降段压指令提前泄压 (负开口), 不再出现 in-place 应用下的 windup/M 形。
 IF nWaveType = 1 AND bTrapShapeEnable AND iIterCount &gt;= 1 AND rPrevTargetRange &gt; 0.001 THEN
-    iShapeSeg := REAL_TO_INT(rPhi * 12.0);
+    iShapeSeg := REAL_TO_INT(rPhi * 36.0);
     IF iShapeSeg &lt; 0  THEN iShapeSeg := 0;  END_IF
-    IF iShapeSeg &gt; 11 THEN iShapeSeg := 11; END_IF
+    IF iShapeSeg &gt; 35 THEN iShapeSeg := 35; END_IF
     iShapeSeg := iShapeSeg + 1;
     rShapeOobSum[iShapeSeg] := rShapeOobSum[iShapeSeg] + (rTargetRaw - rActual);  // 指令-实际; 全周期累加
     iShapeCnt[iShapeSeg]    := iShapeCnt[iShapeSeg] + 1;
@@ -4833,17 +4842,17 @@ ELSIF nWaveType = 1 AND bTrapShapeEnable THEN
     //   "控制该处 actual 的那一拍"就动作 → actual 准时进带 (治上升欠冲、下降提前泄压),
     //   且闭环对齐避免 in-place 应用的 windup/M 形。滞后取整周期互相关估计 (PRG 已算, GVL 传入, 周期%)。
     //   全周期施加 (含下降段): rShapeCorr 双向, 下降段为负 → 指令负开口提前泄压, 实际整周期贴指令。
-    //   段间线性插值: 各段修正定义在段中心 k/12 (与累加分箱 round 取整一致); 在相邻段中心间线性过渡,
+    //   段间线性插值: 各段修正定义在段中心 k/36 (与累加分箱 round 取整一致); 在相邻段中心间线性过渡,
     //   使施加的修正沿相位连续 → 修正后指令无阶梯跳变 → 快响应系统不被台阶激起压力震动。
     rNorm := rPhi + GVL_PulsePressure.PP_Oil_EnvPhaseLag * 0.01;   // 提前相位 ψ (rNorm 复用为临时量)
     IF rNorm &gt;= 1.0 THEN rNorm := rNorm - 1.0; END_IF
-    rNorm := rNorm * 12.0;                                         // 段中心坐标 ∈ [0,12)
+    rNorm := rNorm * 36.0;                                         // 段中心坐标 ∈ [0,36)
     iShapeSeg := REAL_TO_INT(rNorm);                              // 下侧段; REAL_TO_INT 就近取整,
     IF INT_TO_REAL(iShapeSeg) &gt; rNorm THEN iShapeSeg := iShapeSeg - 1; END_IF   // 若取上了则下修成 floor
     IF iShapeSeg &lt; 0  THEN iShapeSeg := 0;  END_IF
-    IF iShapeSeg &gt; 11 THEN iShapeSeg := 11; END_IF
+    IF iShapeSeg &gt; 35 THEN iShapeSeg := 35; END_IF
     rDelta := rNorm - INT_TO_REAL(iShapeSeg);                    // 段内插值系数 ∈ [0,1) (rDelta 复用)
-    iBinK  := (iShapeSeg + 1) MOD 12;                            // 上侧段 (环形回绕到段 0)
+    iBinK  := (iShapeSeg + 1) MOD 36;                            // 上侧段 (环形回绕到段 0)
     rVirtualTarget := rTargetRaw
                     + rShapeCorr[iShapeSeg + 1] * (1.0 - rDelta) + rShapeCorr[iBinK + 1] * rDelta;
     rOutput        := rVirtualTarget - rTargetRaw;

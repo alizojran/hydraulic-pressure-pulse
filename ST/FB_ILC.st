@@ -9,9 +9,9 @@ VAR_INPUT
 	bReset          : BOOL;
 	iMaxIterations  : INT;
 	rLearningRate   : REAL := 0.3;   // 端点学习率
-	rAlphaLR        : REAL := 0.2;   // α 学习率（正弦 8 段、梯形 12 段）
-	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（仅正弦 8 段; 梯形形态为固定启用的 12 段命令跟踪前馈）
-	bTrapShapeEnable : BOOL := FALSE; // 梯形形态修正使能: TRUE=12段命令跟踪前馈整形(双向); FALSE=仅端点补偿(定点PMax/底部PMin幅值, 仿射重映射)
+	rAlphaLR        : REAL := 0.2;   // α 学习率（正弦 8 段）
+	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（仅正弦 8 段; 梯形形态由 bTrapShapeEnable 控制 36 段命令跟踪前馈）
+	bTrapShapeEnable : BOOL := FALSE; // 梯形形态修正使能: TRUE=36段命令跟踪前馈整形(双向); FALSE=仅端点补偿(定点PMax/底部PMin幅值, 仿射重映射)
 	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正
 	iWaveTypeIn     : INT  := 0;     // 波形类型 (与 FB_WaveformGen 同编码): 0=正弦 1=梯形 2=水锤波; 其他值按正弦处理
 	rWHPMaxTarget   : REAL := 0.0;   // [水锤] PMax 保压段目标 (MPa); 用于 hold 段幅值修正学习
@@ -41,8 +41,8 @@ VAR_OUTPUT
 	rVPeak         : REAL;           // 水锤过冲峰指令 (MPa) — 让 actual 抵达 P_OS
 	rWHHoldActual  : REAL;           // 上周期 PMax 保压段 actual 均值 (诊断)
 	rWHLowActual   : REAL;           // 上周期 PMin 低保持段 actual 均值 (诊断)
-	// 梯形包络形态修正 (12 相位段全周期逐段命令跟踪, 把 actual 逐段贴回指令线)
-	rShapeCorr     : ARRAY [1..12] OF REAL;  // 各相位段 MPa 修正量 (双向, 阀可负开口; 全周期叠加在指令上)
+	// 梯形包络形态修正 (36 相位段全周期逐段命令跟踪, 把 actual 逐段贴回指令线; 高分辨率拐角不互消)
+	rShapeCorr     : ARRAY [1..36] OF REAL;  // 各相位段 MPa 修正量 (双向, 阀可负开口; 全周期叠加在指令上)
 END_VAR
 VAR
 	rMidpoint        : REAL;
@@ -114,9 +114,9 @@ VAR
 	rEnvInUp            : REAL;       // 内缩包络上限 = rTargetRaw + ENV_INNER_RATIO * (rEnvUpper - rTargetRaw)
 	rEnvInLo            : REAL;       // 内缩包络下限
 	// 梯形包络形态修正状态
-	rShapeOobSum        : ARRAY [1..12] OF REAL;  // 本周期各段命令跟踪误差累加 (指令-实际; >0 实际偏低)
-	iShapeCnt           : ARRAY [1..12] OF INT;   // 各段采样计数
-	iShapeSeg           : INT;       // 当前相位段 (1..12)
+	rShapeOobSum        : ARRAY [1..36] OF REAL;  // 本周期各段命令跟踪误差累加 (指令-实际; >0 实际偏低)
+	iShapeCnt           : ARRAY [1..36] OF INT;   // 各段采样计数
+	iShapeSeg           : INT;       // 当前相位段 (1..36)
 	rShapeErrSeg        : REAL;      // 某段平均命令跟踪误差 (临时)
 	rShapeDB            : REAL;      // 形态修正死区 (MPa, = K×量程)
 END_VAR
@@ -183,7 +183,7 @@ IF bReset OR NOT bEnable THEN
     rWHOSPeakActual := -1.0E30;
     rWHHoldSum := 0.0; iWHHoldCount := 0;
     rWHLowSum  := 0.0; iWHLowCount  := 0;
-    FOR iBinK := 1 TO 12 DO
+    FOR iBinK := 1 TO 36 DO
         rShapeCorr[iBinK]   := 0.0;
         rShapeOobSum[iBinK] := 0.0;
         iShapeCnt[iBinK]    := 0;
@@ -410,7 +410,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     IF nWaveType = 1 AND bTrapShapeEnable AND iIterCount > nWarmupCycles THEN
         rLimit   := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
         rShapeDB := SHAPE_CORR_DB_K   * rPrevTargetRange;
-        FOR iBinK := 1 TO 12 DO
+        FOR iBinK := 1 TO 36 DO
             IF iShapeCnt[iBinK] > 0 THEN
                 rShapeErrSeg := rShapeOobSum[iBinK] / INT_TO_REAL(iShapeCnt[iBinK]);
                 IF rShapeErrSeg > rShapeDB OR rShapeErrSeg < -rShapeDB THEN
@@ -439,7 +439,7 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
 
     // 梯形形态修正累加器复位 (同样放在学习之后)
     IF nWaveType = 1 THEN
-        FOR iBinK := 1 TO 12 DO
+        FOR iBinK := 1 TO 36 DO
             rShapeOobSum[iBinK] := 0.0;
             iShapeCnt[iBinK]    := 0;
         END_FOR
@@ -549,9 +549,9 @@ END_IF
 //   各段修正按 lag-FF 提前应用 (见输出段), 落在"控制该处 actual 的那一拍指令"上, 闭环对齐
 //   → 升段抬指令补滞后、降段压指令提前泄压 (负开口), 不再出现 in-place 应用下的 windup/M 形。
 IF nWaveType = 1 AND bTrapShapeEnable AND iIterCount >= 1 AND rPrevTargetRange > 0.001 THEN
-    iShapeSeg := REAL_TO_INT(rPhi * 12.0);
+    iShapeSeg := REAL_TO_INT(rPhi * 36.0);
     IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
-    IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
+    IF iShapeSeg > 35 THEN iShapeSeg := 35; END_IF
     iShapeSeg := iShapeSeg + 1;
     rShapeOobSum[iShapeSeg] := rShapeOobSum[iShapeSeg] + (rTargetRaw - rActual);  // 指令-实际; 全周期累加
     iShapeCnt[iShapeSeg]    := iShapeCnt[iShapeSeg] + 1;
@@ -644,17 +644,17 @@ ELSIF nWaveType = 1 AND bTrapShapeEnable THEN
     //   "控制该处 actual 的那一拍"就动作 → actual 准时进带 (治上升欠冲、下降提前泄压),
     //   且闭环对齐避免 in-place 应用的 windup/M 形。滞后取整周期互相关估计 (PRG 已算, GVL 传入, 周期%)。
     //   全周期施加 (含下降段): rShapeCorr 双向, 下降段为负 → 指令负开口提前泄压, 实际整周期贴指令。
-    //   段间线性插值: 各段修正定义在段中心 k/12 (与累加分箱 round 取整一致); 在相邻段中心间线性过渡,
+    //   段间线性插值: 各段修正定义在段中心 k/36 (与累加分箱 round 取整一致); 在相邻段中心间线性过渡,
     //   使施加的修正沿相位连续 → 修正后指令无阶梯跳变 → 快响应系统不被台阶激起压力震动。
     rNorm := rPhi + GVL_PulsePressure.PP_Oil_EnvPhaseLag * 0.01;   // 提前相位 ψ (rNorm 复用为临时量)
     IF rNorm >= 1.0 THEN rNorm := rNorm - 1.0; END_IF
-    rNorm := rNorm * 12.0;                                         // 段中心坐标 ∈ [0,12)
+    rNorm := rNorm * 36.0;                                         // 段中心坐标 ∈ [0,36)
     iShapeSeg := REAL_TO_INT(rNorm);                              // 下侧段; REAL_TO_INT 就近取整,
     IF INT_TO_REAL(iShapeSeg) > rNorm THEN iShapeSeg := iShapeSeg - 1; END_IF   // 若取上了则下修成 floor
     IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
-    IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
+    IF iShapeSeg > 35 THEN iShapeSeg := 35; END_IF
     rDelta := rNorm - INT_TO_REAL(iShapeSeg);                    // 段内插值系数 ∈ [0,1) (rDelta 复用)
-    iBinK  := (iShapeSeg + 1) MOD 12;                            // 上侧段 (环形回绕到段 0)
+    iBinK  := (iShapeSeg + 1) MOD 36;                            // 上侧段 (环形回绕到段 0)
     rVirtualTarget := rTargetRaw
                     + rShapeCorr[iShapeSeg + 1] * (1.0 - rDelta) + rShapeCorr[iBinK + 1] * rDelta;
     rOutput        := rVirtualTarget - rTargetRaw;
