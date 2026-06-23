@@ -11,7 +11,7 @@ VAR_INPUT
 	rLearningRate   : REAL := 0.3;   // 端点学习率
 	rAlphaLR        : REAL := 0.2;   // α 学习率（正弦 8 段、梯形 12 段）
 	bAlphaEnable    : BOOL := TRUE;  // α 自学习使能（仅正弦 8 段; 梯形形态为固定启用的 12 段命令跟踪前馈）
-	bTrapShapeEnable : BOOL := FALSE; // [保留/不再门控] 梯形已固定启用 12 段命令跟踪前馈修正(只向上); 仅为接口/Modbus 兼容保留
+	bTrapShapeEnable : BOOL := FALSE; // 梯形形态修正使能: TRUE=12段命令跟踪前馈整形(双向); FALSE=仅端点补偿(定点PMax/底部PMin幅值, 仿射重映射)
 	nWarmupCycles   : INT  := 3;     // 暖机周期数：前N个周期透传不修正
 	iWaveTypeIn     : INT  := 0;     // 波形类型 (与 FB_WaveformGen 同编码): 0=正弦 1=梯形 2=水锤波; 其他值按正弦处理
 	rWHPMaxTarget   : REAL := 0.0;   // [水锤] PMax 保压段目标 (MPa); 用于 hold 段幅值修正学习
@@ -331,9 +331,10 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
                 END_IF
             END_IF
 
-            // 端点幅值自学习（加法型, 仅正弦: 供 α 重映射后的仿射缩放）
-            //   梯形改用逐段命令跟踪、水锤用专用 3 级学习, 均跳过此通用路径
-            IF nWaveType = 0 THEN
+            // 端点幅值自学习（加法型: 供仿射重映射的端点缩放 rVMax/rVMin）
+            //   正弦(0) 恒用; 梯形(1) 仅在 NOT bTrapShapeEnable 时用(定点/底部端点补偿);
+            //   梯形开形态修正用逐段命令跟踪、水锤用专用 3 级学习, 均跳过此通用路径
+            IF nWaveType = 0 OR (nWaveType = 1 AND NOT bTrapShapeEnable) THEN
                 rPeakErrSum   := rPeakErrSum   + rPeakError;
                 rValleyErrSum := rValleyErrSum + rValleyError;
                 nUpdateCount  := nUpdateCount  + 1;
@@ -404,8 +405,9 @@ IF bNewCycle AND NOT bNewCyclePrev THEN
     //   全周期累加 (升/保持/降/低保持都修) → 实际整周期贴指令; 配合 lag-FF 提前应用对齐滞后。
     //   对称限幅 ±rLimit; 不随 iMaxIterations 冻结 → 稳态可持续修; 与包络门控无关 → 带内也修。
     //   (不做跨段平滑: 命令跟踪修正廓形非平 (升+/保持~0/降−), 平滑会把升降修正抹进平顶反劣化跟踪。)
+    //   仅 bTrapShapeEnable=TRUE 时执行; FALSE 时改走端点(定点/底部)仿射补偿。
     // ============================================================
-    IF nWaveType = 1 AND iIterCount > nWarmupCycles THEN
+    IF nWaveType = 1 AND bTrapShapeEnable AND iIterCount > nWarmupCycles THEN
         rLimit   := SHAPE_CORR_LIMIT_K * rPrevTargetRange;
         rShapeDB := SHAPE_CORR_DB_K   * rPrevTargetRange;
         FOR iBinK := 1 TO 12 DO
@@ -546,7 +548,7 @@ END_IF
 // 全周期累加每段命令跟踪误差 (指令-实际), 升/保持/降/低保持都累加 → 实际整周期贴指令。
 //   各段修正按 lag-FF 提前应用 (见输出段), 落在"控制该处 actual 的那一拍指令"上, 闭环对齐
 //   → 升段抬指令补滞后、降段压指令提前泄压 (负开口), 不再出现 in-place 应用下的 windup/M 形。
-IF nWaveType = 1 AND iIterCount >= 1 AND rPrevTargetRange > 0.001 THEN
+IF nWaveType = 1 AND bTrapShapeEnable AND iIterCount >= 1 AND rPrevTargetRange > 0.001 THEN
     iShapeSeg := REAL_TO_INT(rPhi * 12.0);
     IF iShapeSeg < 0  THEN iShapeSeg := 0;  END_IF
     IF iShapeSeg > 11 THEN iShapeSeg := 11; END_IF
@@ -577,7 +579,8 @@ END_IF
 // 源波形 rSourceTarget：
 //   正弦(0) → α 8 段相位重映射后重建
 //   水锤(2) → 5 段直接重构并提前返回
-//   梯形(1) → 全周期逐段命令跟踪 (lag-FF) 在上方分支提前返回
+//   梯形(1) 开形态修正 → 全周期逐段命令跟踪 (lag-FF) 在上方分支提前返回
+//   梯形(1) 关形态修正 → rSourceTarget := rTargetRaw (落到 ELSE), 走端点仿射重映射(定点/底部补偿)
 IF nWaveType = 0 THEN
     rT1 := rAlphaCmd[1];
     rT2 := rT1 + rAlphaCmd[2];
@@ -635,8 +638,8 @@ ELSIF nWaveType = 2 THEN
     bNewCyclePrev := bNewCycle;
     RETURN;
 
-ELSIF nWaveType = 1 THEN
-    // 梯形: 逐段修正按"滞后提前"应用 (lag-FF) —— 在指令相位 φ 施加为 actual 相位 (φ+lag) 学到的
+ELSIF nWaveType = 1 AND bTrapShapeEnable THEN
+    // 梯形(开形态修正): 逐段修正按"滞后提前"应用 (lag-FF) —— 在指令相位 φ 施加为 actual 相位 (φ+lag) 学到的
     //   修正量。actual 相位 ψ 由 φ=ψ-lag 处的指令决定; 把 ψ 的修正提前到 ψ-lag 施加, 使指令在
     //   "控制该处 actual 的那一拍"就动作 → actual 准时进带 (治上升欠冲、下降提前泄压),
     //   且闭环对齐避免 in-place 应用的 windup/M 形。滞后取整周期互相关估计 (PRG 已算, GVL 传入, 周期%)。

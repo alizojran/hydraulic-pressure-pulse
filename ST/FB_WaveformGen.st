@@ -249,10 +249,12 @@ END_IF
 //               峰/谷垂直容差 ±ΔP (标准 0.02·PMax); PMean 处水平带宽
 //               2·0.05C = 0.1C (最大畸变)。时移恒向极值 → 标称必在带内
 // 梯形  (Fig.1 上图/供油腔): 保压带 [0.96, 1.04]·PMax; 低压段上限
-//               1.1·PMin (不低于 0.345 MPa = 50 psi); 升沿: 上包络
-//               提前 ENV_SLACK 到顶 / 下包络滞后 ENV_SLACK 到 0.96;
-//               降沿: 下包络立即落 0, 上包络自下降结束后缓降至周期
-//               末回到 1.1·PMin (允许实际压力长拖尾)
+//               1.1·PMin (不低于 0.345 MPa = 50 psi); 升/降沿包络边沿与
+//               指令同斜率 (平行, 由指令仿射/相位平移生成 → 实际不撞沿):
+//               上包络升沿=指令仿射到 1.04·PMax; 下包络=0.96·PMax×指令
+//               归一(取 φ±ENV_SLACK 较小者 → 升沿滞后 slack/降沿提前 slack);
+//               上包络下降段保持满量程 1.04·PMax 后自降沿结束缓降回
+//               1.1·PMin (长拖尾, 允许实际慢泄压)
 // 水锤  (Fig.2): 过冲峰+ring 段 (标准 0~15%C) 为全幅自由窗: 上包络
 //               平直 1.04·P_OS (峰容差 ±4%, 峰值下限 0.96·P_OS 需另
 //               行峰值检测)、下包络 0; 保压段上限 1.1·PMax / 下限
@@ -269,32 +271,38 @@ IF rBaseUp < ENV_BASE_MIN THEN rBaseUp := ENV_BASE_MIN; END_IF
 
 CASE iWaveType OF
 
-1:  // ---- 梯形 (Fig.1) ----
-    rET1 := rR;             // 升沿结束
+1:  // ---- 梯形 (Fig.1): 包络边沿与指令同斜率 (平行), 防实际撞沿 ----
     rET2 := rR + rH;        // 保压结束 / 降沿开始
     rET3 := rR + rH + rF;   // 降沿结束
 
-    // 上包络: (0, 1.1·PMin) → (T1-slack, 1.04·PMax) → 平 → (T3) → 缓降 → (1, 1.1·PMin)
-    IF rPhase < rET1 - ENV_SLACK THEN
-        rTargetUpper := rBaseUp + (ENV_TRAP_UP * rPMax - rBaseUp) * rPhase / (rET1 - ENV_SLACK);
-    ELSIF rPhase < rET3 THEN
-        rTargetUpper := ENV_TRAP_UP * rPMax;
-    ELSIF rET3 < 0.999 THEN
-        rTargetUpper := ENV_TRAP_UP * rPMax
-                      + (rBaseUp - ENV_TRAP_UP * rPMax) * (rPhase - rET3) / (1.0 - rET3);
-    ELSE
-        rTargetUpper := rBaseUp;
-    END_IF
+    IF rPMax - rPMin > 0.001 THEN
+        // 上包络: 升沿+保压 = 指令仿射映射 [PMin,PMax]→[1.1·PMin, 1.04·PMax] (升沿与指令同斜率,
+        //   保压平直 1.04·PMax); 下降段保持满量程 1.04·PMax (给实际泄压留全幅余量), 自降沿结束
+        //   缓降回 1.1·PMin (长拖尾, 允许实际慢泄压)。
+        IF rPhase < rET2 THEN
+            rTargetUpper := rBaseUp + (ENV_TRAP_UP * rPMax - rBaseUp) * (rTarget - rPMin) / (rPMax - rPMin);
+        ELSIF rPhase < rET3 THEN
+            rTargetUpper := ENV_TRAP_UP * rPMax;
+        ELSIF rET3 < 0.999 THEN
+            rTargetUpper := ENV_TRAP_UP * rPMax
+                          + (rBaseUp - ENV_TRAP_UP * rPMax) * (rPhase - rET3) / (1.0 - rET3);
+        ELSE
+            rTargetUpper := rBaseUp;
+        END_IF
 
-    // 下包络: (0, 0) → (T1+slack, 0.96·PMax) → 平 → (T2) → (T2+slack, 0) → 0
-    IF rPhase < rET1 + ENV_SLACK THEN
-        rTargetLower := ENV_TRAP_LO * rPMax * rPhase / (rET1 + ENV_SLACK);
-    ELSIF rPhase < rET2 THEN
-        rTargetLower := ENV_TRAP_LO * rPMax;
-    ELSIF rPhase < rET2 + ENV_SLACK THEN
-        rTargetLower := ENV_TRAP_LO * rPMax * (1.0 - (rPhase - rET2) / ENV_SLACK);
+        // 下包络: 0.96·PMax × 指令归一化(取 φ±ENV_SLACK 两相位中较小者) → 升沿滞后 slack、
+        //   降沿提前 slack, 边沿与指令同斜率。降沿提前下落 → 下降中实际仍在其上方, 不撞下包络拐点。
+        rEnvPhL := rPhase - ENV_SLACK; IF rEnvPhL < 0.0  THEN rEnvPhL := rEnvPhL + 1.0; END_IF
+        rEnvPhU := rPhase + ENV_SLACK; IF rEnvPhU >= 1.0 THEN rEnvPhU := rEnvPhU - 1.0; END_IF
+        rET1   := (FN_PulseWave(rPhaseIn := rEnvPhL, rPMin := rPMin, rPMax := rPMax, iWaveType := 1,
+                                rR := rR, rH := rH, rF := rF, rRing := 0.0, rPeakOS := rPMax) - rPMin) / (rPMax - rPMin);
+        rEnvDP := (FN_PulseWave(rPhaseIn := rEnvPhU, rPMin := rPMin, rPMax := rPMax, iWaveType := 1,
+                                rR := rR, rH := rH, rF := rF, rRing := 0.0, rPeakOS := rPMax) - rPMin) / (rPMax - rPMin);
+        IF rEnvDP < rET1 THEN rET1 := rEnvDP; END_IF        // 取较小归一化 (升沿滞后/降沿提前)
+        rTargetLower := ENV_TRAP_LO * rPMax * rET1;
     ELSE
-        rTargetLower := 0.0;
+        rTargetUpper := rPMax;
+        rTargetLower := rPMin;
     END_IF
 
 2:  // ---- 水锤 (Fig.2) ----
