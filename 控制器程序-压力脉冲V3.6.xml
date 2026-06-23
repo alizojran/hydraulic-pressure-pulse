@@ -4822,12 +4822,19 @@ ELSIF nWaveType = 1 THEN
     //   "控制该处 actual 的那一拍"就动作 → actual 准时进带 (治上升欠冲、下降提前泄压),
     //   且闭环对齐避免 in-place 应用的 windup/M 形。滞后取整周期互相关估计 (PRG 已算, GVL 传入, 周期%)。
     //   全周期施加 (含下降段): rShapeCorr 双向, 下降段为负 → 指令负开口提前泄压, 实际整周期贴指令。
-    rNorm := rPhi + GVL_PulsePressure.PP_Oil_EnvPhaseLag * 0.01;   // 提前相位 (rNorm 复用为临时量)
+    //   段间线性插值: 各段修正定义在段中心 k/12 (与累加分箱 round 取整一致); 在相邻段中心间线性过渡,
+    //   使施加的修正沿相位连续 → 修正后指令无阶梯跳变 → 快响应系统不被台阶激起压力震动。
+    rNorm := rPhi + GVL_PulsePressure.PP_Oil_EnvPhaseLag * 0.01;   // 提前相位 ψ (rNorm 复用为临时量)
     IF rNorm &gt;= 1.0 THEN rNorm := rNorm - 1.0; END_IF
-    iShapeSeg := REAL_TO_INT(rNorm * 12.0);
+    rNorm := rNorm * 12.0;                                         // 段中心坐标 ∈ [0,12)
+    iShapeSeg := REAL_TO_INT(rNorm);                              // 下侧段; REAL_TO_INT 就近取整,
+    IF INT_TO_REAL(iShapeSeg) &gt; rNorm THEN iShapeSeg := iShapeSeg - 1; END_IF   // 若取上了则下修成 floor
     IF iShapeSeg &lt; 0  THEN iShapeSeg := 0;  END_IF
     IF iShapeSeg &gt; 11 THEN iShapeSeg := 11; END_IF
-    rVirtualTarget := rTargetRaw + rShapeCorr[iShapeSeg + 1];   // 全周期施加 (升+ / 保持~0 / 降−)
+    rDelta := rNorm - INT_TO_REAL(iShapeSeg);                    // 段内插值系数 ∈ [0,1) (rDelta 复用)
+    iBinK  := (iShapeSeg + 1) MOD 12;                            // 上侧段 (环形回绕到段 0)
+    rVirtualTarget := rTargetRaw
+                    + rShapeCorr[iShapeSeg + 1] * (1.0 - rDelta) + rShapeCorr[iBinK + 1] * rDelta;
     rOutput        := rVirtualTarget - rTargetRaw;
     bNewCyclePrev  := bNewCycle;
     RETURN;
